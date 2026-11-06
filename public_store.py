@@ -68,7 +68,7 @@ def check_public(root):
  try:
   from public_state import validate_state
   validate_state(db,root)
-  expected={'topic_observations','receipts','tasks','topic_rows','reply_rows','reply_expectations','known_topic_types','reply_observations','refreshed_tasks','totals','controller','transport_stops','resource_stops','policy_exclusions','event_pages'}
+  expected={'fetch_failures','topic_observations','receipts','tasks','topic_rows','reply_rows','reply_expectations','known_topic_types','reply_observations','refreshed_tasks','totals','controller','transport_stops','resource_stops','policy_exclusions','event_pages'}
   tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
   if tables-expected:raise PublicationError('unreviewed database tables')
   receipts={};topics={};replies={};events={};paths=set()

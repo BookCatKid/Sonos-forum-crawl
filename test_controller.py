@@ -22,8 +22,8 @@ class Tests(unittest.TestCase):
    r=advance_replies(root);self.assertEqual(r['tasks']['pending'],1)
  def test_denial_persists_and_prevents_resume(self):
   with tempfile.TemporaryDirectory() as d,patch('controller.time.sleep'):
-   root,p=self.prep(d);a=run_batch(root,1,session_factory=Denied);self.assertEqual(a['reason'],'HTTP403')
-   with self.assertRaises(Stop):run_batch(root,1,session_factory=Fake,host_filter='en.community.sonos.com')
+   root,p=self.prep(d);a=run_batch(root,1,session_factory=Denied);self.assertIn('logged gap',a['reason'])
+   self.assertEqual(run_batch(root,1,session_factory=Fake,host_filter='en.community.sonos.com')['captured_this_batch'],0)
  def test_storage_budget_prevents_network(self):
   with tempfile.TemporaryDirectory() as d,patch('controller.time.sleep'):
    root,p=self.prep(d);a=run_batch(root,1,byte_budget=0,session_factory=Denied);self.assertEqual(a['captured_this_batch'],0);self.assertEqual(a['reason'],'disk budget reached')
@@ -72,5 +72,5 @@ class ResourceIsolationTests(unittest.TestCase):
     for i in [1,2]:store.task('https://en.community.sonos.com/topic/'+str(i)+'/replies',{'offset':0,'pageSize':20,'sort':'oldestFirst'},'topic-replies')
    result=run_batch(root,2,session_factory=OneDenied)
    self.assertEqual(result['captured_this_batch'],1)
-   self.assertEqual(store.db.execute('select count(*) from resource_stops').fetchone()[0],1)
+   self.assertEqual(store.db.execute('select count(*) from fetch_failures').fetchone()[0],1)
    self.assertEqual(store.db.execute('select count(*) from transport_stops').fetchone()[0],0)

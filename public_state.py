@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+def urlsplit_host(url):return urlsplit(url).hostname
 """Exact public checkpoint database/state contract. No body classification."""
 import datetime,hashlib,json,re,sqlite3,tempfile
 from pathlib import Path
@@ -6,6 +8,7 @@ from mirror import HOSTS
 from public_payload import PublicationError
 
 EXTRA={
+ 'fetch_failures':[('url','TEXT'),('host','TEXT'),('category_id','INTEGER'),('reason','TEXT'),('at','TEXT'),('stage','TEXT')],
  'event_pages':[('url','TEXT'),('raw_json','TEXT')],
  'controller':[('key','TEXT'),('value','TEXT')],
  'transport_stops':[('host','TEXT'),('reason','TEXT'),('at','TEXT')],
@@ -67,6 +70,12 @@ def validate_state(db,root):
    allowed.update(stop_code(PublicationError(v)) for v in ['nonempty attachment metadata schema awaits review','invalid public content URL','invalid public URL type','unreviewed topic type','listing contains carried excluded identity; review boundary before storage','unreviewed fields:fixture','other'])
    allowed.update('public-schema:field-type:'+v for v in ['content','title','categoryName','publishedAt','lastActivityAt','replyCount','inclusiveVisibleReplyCount','hasBestAnswer','name','username','repliedAt','inclusiveReplyCount','isBestAnswer','isPinnedReply','startAt','endAt','location','timezoneName','type'])
    if row['host'] not in HOSTS or row['reason'] not in allowed:raise PublicationError('unreviewed stop metadata')
+   timestamp(row['at'])
+ if 'fetch_failures' in tables:
+  for row in db.execute('SELECT * FROM fetch_failures'):
+   from scope_guard import permitted,load_scope
+   if not permitted(row['url'],load_scope(Path(root)/'scope.json')) or urlsplit_host(row['url'])!=row['host'] or row['stage']!='task' or (row['category_id'] is not None and (type(row['category_id'])!=int or row['category_id']<1)):raise PublicationError('invalid fetch failure metadata')
+   if row['reason'] not in {'HTTP 401','HTTP 403','HTTP 404','HTTP 500','HTTP 502','HTTP 503','timeout','network','unexpected-response','public-schema'} and row['reason'] not in {'public-schema:attachments','public-schema:content-url','public-schema:url-type','public-schema:topic-type','public-schema:excluded-id','public-schema:unknown-field','public-schema:other'} and row['reason'] not in {'public-schema:field-type:'+v for v in ['content','title','categoryName','publishedAt','lastActivityAt','replyCount','inclusiveVisibleReplyCount','hasBestAnswer','name','username','repliedAt','inclusiveReplyCount','isBestAnswer','isPinnedReply','startAt','endAt','location','timezoneName','type']}:raise PublicationError('invalid fetch failure reason')
    timestamp(row['at'])
  if 'resource_stops' in tables:
   for row in db.execute('SELECT * FROM resource_stops'):

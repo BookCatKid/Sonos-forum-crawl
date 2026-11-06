@@ -60,10 +60,16 @@ def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,d
  if policy_file.exists():
   from scope_guard import load_scope,enforce
   enforce(store,load_scope(policy_file))
- sessions={};done=0;reason=None;started=time.monotonic();last_host=None
+ sessions={};done=0;reason=None;started=time.monotonic();last_host=None;failure_filter_needed=True
  for i in range(requests):
   if max_seconds is not None and time.monotonic()-started>=max_seconds:reason='batch wall clock budget reached';break
   if usage(root)>=byte_budget or shutil.disk_usage(root).free<free_floor:reason='disk budget reached';break
+  from fetch_failures import blocked,record
+  failures=store.db.execute('SELECT 1 FROM fetch_failures LIMIT 1').fetchone() if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='fetch_failures'").fetchone() else None
+  for candidate in (phase_tasks(store,phase[0]) if failures and failure_filter_needed else []):
+   if blocked(store,candidate):
+    with store.db:store.db.execute("UPDATE tasks SET state='failed' WHERE id=?",(candidate['id'],))
+  failure_filter_needed=False
   rows=phase_tasks(store,phase[0]);rows=[r for r in rows if (not host_filter or urlsplit(r['url']).hostname==host_filter) and urlsplit(r['url']).hostname not in stopped_hosts];available=sorted({urlsplit(r['url']).hostname for r in rows});next_host=next((h for h in available if last_host is None or h>last_host),available[0] if available else None);row=next((r for r in rows if urlsplit(r['url']).hostname==next_host),None)
   if not row:reason='phase queue empty; review before explicit next phase';break
   host=urlsplit(row['url']).hostname;last_host=host
@@ -80,12 +86,9 @@ def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,d
    store.ingest(e,typ);done+=1
    with store.db:store.db.execute('INSERT OR REPLACE INTO controller VALUES(?,?)',('last_checkpoint',NOW()))
   except (Stop,OSError,ValueError) as e:
-   if reading_resource and str(e) in ('HTTP 401','HTTP 403','HTTP 404'):
-    with store.db:
-     store.db.execute('CREATE TABLE IF NOT EXISTS resource_stops(task_id TEXT PRIMARY KEY,url TEXT,reason TEXT,at TEXT)')
-     store.db.execute('INSERT OR REPLACE INTO resource_stops VALUES(?,?,?,?)',(row['id'],row['url'],str(e),NOW()))
-     store.db.execute("UPDATE tasks SET state='failed' WHERE url=? AND state='pending'",(row['url'],))
-    reason='resource denied; retained gap, unrelated tasks remain';continue
+   code=stop_reason(e)
+   if reading_resource and code not in {'HTTP 429','challenge','robots'}:
+    record(store,row,code,NOW());failure_filter_needed=True;reason='resource fetch failed; logged gap, unrelated tasks remain';continue
    with store.db:store.db.execute('INSERT OR REPLACE INTO transport_stops VALUES(?,?,?)',(host,stop_reason(e),NOW()))
    reason=stop_reason(e);stopped_hosts.add(host);continue
  return {'captured_this_batch':done,'reason':reason or 'request budget reached','status':status(root),'phase':phase[0]}
