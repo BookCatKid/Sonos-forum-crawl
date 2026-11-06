@@ -1,7 +1,7 @@
 """Real local checkpoint/lineage recovery, synthetic data, zero network."""
 import unittest,tempfile,json
 from pathlib import Path
-from test_unattended import UnattendedTests
+import test_unattended
 from test_generations import MemoryTransport
 from packed_generation import publish,restore
 from recovery import recover_terminated
@@ -11,7 +11,7 @@ from public_store import check_public
 class RecoveryRoundtripTests(unittest.TestCase):
  def test_lost_hosted_attempt_retained_then_new_generation_fresh_restores(self):
   with tempfile.TemporaryDirectory() as d:
-   p=Path(d);root=p/'root';root.mkdir();UnattendedTests().setup_state(root);remote=MemoryTransport();publish(root,'checkpoint-base',remote)
+   p=Path(d);root=p/'root';root.mkdir();test_unattended.UnattendedTests().setup_state(root);remote=MemoryTransport();publish(root,'checkpoint-base',remote)
    lost='checkpoint-20261106-180000-123';reserve(remote,'checkpoint-base',lost)
    remote.put(lost,'checkpoint.part-0000',b'incomplete uncommitted bytes')
    remote.workflow_run=lambda i:{'id':i,'status':'completed','event':'workflow_dispatch','path':'.github/workflows/capture.yml'}

@@ -1,4 +1,4 @@
-"""Owner-authorized ongoing cycles. Access stops are never reset here."""
+"""Ongoing cycle mechanics. Access stops are never reset here."""
 import datetime,json
 from urllib.parse import urlsplit
 from public_store import PublicStore
