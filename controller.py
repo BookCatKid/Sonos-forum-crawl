@@ -60,13 +60,13 @@ def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,d
  if policy_file.exists():
   from scope_guard import load_scope,enforce
   enforce(store,load_scope(policy_file))
- sessions={};done=0;reason=None;started=time.monotonic()
+ sessions={};done=0;reason=None;started=time.monotonic();last_host=None
  for i in range(requests):
   if max_seconds is not None and time.monotonic()-started>=max_seconds:reason='batch wall clock budget reached';break
   if usage(root)>=byte_budget or shutil.disk_usage(root).free<free_floor:reason='disk budget reached';break
-  rows=phase_tasks(store,phase[0]);rows=[r for r in rows if (not host_filter or urlsplit(r['url']).hostname==host_filter) and urlsplit(r['url']).hostname not in stopped_hosts];row=rows[0] if rows else None
+  rows=phase_tasks(store,phase[0]);rows=[r for r in rows if (not host_filter or urlsplit(r['url']).hostname==host_filter) and urlsplit(r['url']).hostname not in stopped_hosts];available=sorted({urlsplit(r['url']).hostname for r in rows});next_host=next((h for h in available if last_host is None or h>last_host),available[0] if available else None);row=next((r for r in rows if urlsplit(r['url']).hostname==next_host),None)
   if not row:reason='phase queue empty; review before explicit next phase';break
-  host=urlsplit(row['url']).hostname
+  host=urlsplit(row['url']).hostname;last_host=host
   reading_resource=False
   try:
    if host not in sessions:
