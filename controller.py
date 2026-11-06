@@ -87,7 +87,7 @@ def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,d
      store.db.execute("UPDATE tasks SET state='failed' WHERE url=? AND state='pending'",(row['url'],))
     reason='resource denied; retained gap, unrelated tasks remain';continue
    with store.db:store.db.execute('INSERT OR REPLACE INTO transport_stops VALUES(?,?,?)',(host,stop_reason(e),NOW()))
-   reason=stop_reason(e);break
+   reason=stop_reason(e);stopped_hosts.add(host);continue
  return {'captured_this_batch':done,'reason':reason or 'request budget reached','status':status(root),'phase':phase[0]}
 
 @exclusive

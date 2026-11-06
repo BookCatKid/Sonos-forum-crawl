@@ -47,6 +47,8 @@ def validate_state(db,root):
    if row['key'] in {'prepared','last_checkpoint'}:timestamp(row['value'])
    elif row['key']=='parser_fix_empty_author_id_v1':
     if row['value']!='omit absent author identity; preserve display attribution':raise PublicationError('unreviewed parser migration')
+   elif row['key']=='parser_fix_empty_authors_v1':
+    if row['value']!='normalize empty author list to empty map':raise PublicationError('unreviewed parser migration')
    elif row['key']=='phase':
     if row['value'] not in {'listing','replies'}:raise PublicationError('unknown phase')
    else:raise PublicationError('unreviewed controller metadata')

@@ -21,3 +21,14 @@ def apply(root):
   if removed:db.execute('INSERT INTO controller VALUES(?,?)',(KEY,'omit absent author identity; preserve display attribution'))
   db.commit();return removed
  finally:db.close()
+
+def apply_empty_authors(root):
+ db=sqlite3.connect(str(root)+'/api.sqlite');key='parser_fix_empty_authors_v1'
+ try:
+  if db.execute('SELECT 1 FROM controller WHERE key=?',(key,)).fetchone():return []
+  row=db.execute("SELECT reason,at FROM transport_stops WHERE host='en.community.sonos.com'").fetchone()
+  if row!=('public-schema:other','2026-11-06T05:09:09.692839+00:00'):return []
+  tasks=db.execute("SELECT request FROM tasks WHERE state='pending' AND url='https://en.community.sonos.com/contentNavigation/topics'").fetchall()
+  if not any(json.loads(x[0]).get('filters',{}).get('category')==[229156] and json.loads(x[0]).get('pagination',{}).get('page')==1 for x in tasks):raise ValueError('empty-authors migration pending evidence mismatch')
+  db.execute("DELETE FROM transport_stops WHERE host='en.community.sonos.com'");db.execute('INSERT INTO controller VALUES(?,?)',(key,'normalize empty author list to empty map'));db.commit();return ['en.community.sonos.com']
+ finally:db.close()

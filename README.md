@@ -256,3 +256,9 @@ synthesize IDs or accept arbitrary nonnumeric IDs. Exact parser-created stops
 are migrated once with fixed host/reason/timestamp/pending-task checks; HTTP,
 throttle and challenge stops are never cleared by this migration. Migration is
 recorded in controller state and immutable checkpoint ancestry.
+
+Second parser repair: an empty public category returns authors:[] with no topics.
+Normalize only that empty list to an empty author map; nonempty lists still fail.
+The exact parser-created EN stop at category229156 is migrated once, preserving
+all real HTTP/throttle/challenge stops. Controller skips a newly stopped host and
+continues other eligible hosts within its existing request/time budget.

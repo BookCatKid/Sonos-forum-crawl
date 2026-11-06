@@ -29,8 +29,8 @@ def scheduled(remote,root,run_id,requests=500,resume=resume_once):
  if not str(run_id).isdigit():raise ValueError('numeric workflow run ID required')
  generation='checkpoint-'+stamp+'-'+str(run_id)
  def bounded(root,n,**kwargs):
-  from parser_migration import apply
-  apply(root)
+  from parser_migration import apply,apply_empty_authors
+  apply(root);apply_empty_authors(root)
   return run_batch(root,n,max_seconds=1200,**kwargs)
  return resume(remote,source,generation,root,requests,allow_large_batch=True,run=bounded)
 

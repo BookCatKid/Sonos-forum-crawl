@@ -156,6 +156,7 @@ def project(e):
  for k in ('total','topicReplyCount','totalPageCount','totalTopicCount'):
   if k in b and (type(b[k])!=int or b[k]<0):raise PublicationError('invalid total count')
  if 'authors' in b:
+  if b['authors']==[]:b['authors']={} # Empty JSON list is the observed no-authors shape.
   if not isinstance(b['authors'],dict):raise PublicationError('expected author map')
   out={}
   for k,a in b['authors'].items():

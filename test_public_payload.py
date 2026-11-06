@@ -22,4 +22,9 @@ class PublicPayloadTests(unittest.TestCase):
   child={'metadata':{'totalCount':0,'hasMore':False,'offset':0},'result':[]}
   e['response']={'authors':{},'topicReplyCount':1,'settings':{'userSubscribed':False},'replies':{'metadata':{'totalCount':1,'hasMore':False,'offset':0},'result':[{'id':4,'publicReplyId':5,'authorId':2,'content':'<p>Exact</p>','children':child,'attachments':[],'likedBy':[]}]}}
   p=project(e);self.assertNotIn('settings',p['response']);self.assertEqual(p['response']['replies']['result'][0]['children'],child);self.assertNotIn('likedBy',p['response']['replies']['result'][0])
+ def test_empty_authors_list_normalizes_to_empty_map(self):
+  e=self.sample();e['response'].update(topics=[],total=0,authors=[]);self.assertEqual(project(e)['response']['authors'],{})
+ def test_nonempty_authors_list_not_silently_dropped(self):
+  e=self.sample();e['response']['authors']=[{'id':1,'name':'name'}]
+  with self.assertRaises(PublicationError):project(e)
 if __name__=='__main__':unittest.main()
