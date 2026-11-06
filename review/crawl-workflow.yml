@@ -1,0 +1,48 @@
+# REVIEW ONLY. Not in .github/workflows, so this file cannot schedule/run itself.
+# No cron, push or PR trigger. Publishing this file does not authorize launch.
+name: Bounded public checkpoint resume
+on:
+  workflow_dispatch:
+    inputs:
+      source_generation:
+        description: Exact previously verified COMMITTED public release tag
+        required: true
+        type: string
+      new_generation:
+        description: New unique generation tag (never overwrite)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: sonos-forum-capture
+  cancel-in-progress: false
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, verified November 5, 2026
+        with:
+          persist-credentials: false
+      - name: Offline regressions
+        run: python3 -m unittest -q
+      - name: Resume at most fifteen anonymous reads and commit public checkpoint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_GENERATION: ${{ inputs.source_generation }}
+          NEW_GENERATION: ${{ inputs.new_generation }}
+        run: >-
+          python3 public_job.py
+          --repository "$REPOSITORY"
+          --source-generation "$SOURCE_GENERATION"
+          --generation "$NEW_GENERATION"
+          --root "$RUNNER_TEMP/forum-run"
+          --requests 15
+# No paid/larger/self-hosted runner, artifact/corpus logging or hidden fallback.
+# A failed upload/restore ends this job. No automatic retry or fresh initialization.
+# Remote pre-capture reservation blocks later runs after an incomplete attempt.
+# Full scheduling/bootstrap/phase handling and real remote tests remain pending.
