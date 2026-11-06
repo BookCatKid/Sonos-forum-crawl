@@ -13,7 +13,19 @@ class PublicStore(APIStore):
    topic_list=e['response'].get('topics',e['response'].get('result',{}).get('topics',[]))
    if isinstance(topic_list,dict):topic_list=[t for values in topic_list.values() for t in values]
    if any(str(t.get('publicId')) in policy['excluded_en_topic_ids'] for t in topic_list):raise PublicationError('listing contains carried excluded identity; review boundary before storage')
-  return super().ingest(e,topic_type)
+  # Public capture is an observed-ID union, not a live visibility snapshot.
+  # Page drift must not erase previously captured topics from future reply plans.
+  import hashlib
+  tid=hashlib.sha256((e['url']+json.dumps(e.get('request') or {},sort_keys=True)).encode()).hexdigest()
+  prior=list(self.db.execute('SELECT task_id,host,public_id,raw_json FROM topic_observations WHERE task_id=?',(tid,)))
+  result=super().ingest(e,topic_type)
+  if prior:
+   with self.db:
+    self.db.executemany('INSERT OR IGNORE INTO topic_observations VALUES(?,?,?,?)',[tuple(r) for r in prior])
+    host=urlsplit(e['url']).hostname
+    self.db.execute('DELETE FROM topic_rows WHERE host=?',(host,))
+    self.db.execute('INSERT OR REPLACE INTO topic_rows SELECT host,public_id,raw_json FROM topic_observations WHERE host=? ORDER BY rowid',(host,))
+  return result
 
 def check_public(root):
  """Publication preflight: schema checks, not textual content analysis."""
