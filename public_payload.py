@@ -57,7 +57,10 @@ def topic(t):
  return t
 
 def replies(c):
- c=fields(c,['metadata','result']);c['metadata']=fields(c['metadata'],META)
+ c=fields(c,['metadata','result'])
+ # UI-only next-page URL is redundant with offset/hasMore; never followed.
+ if 'nextPageTopicUrl' in c['metadata'] and type(c['metadata']['nextPageTopicUrl'])!=str:raise PublicationError('invalid pagination URL type')
+ c['metadata']=fields(c['metadata'],META,['nextPageTopicUrl'])
  for k,v in c['metadata'].items():
   if k in ('hasMore','hasPrevious'):scalar(c['metadata'],k,(bool,))
   elif type(v)!=int or v<0:raise PublicationError('invalid pagination metadata')
@@ -65,6 +68,7 @@ def replies(c):
  for raw in c['result']:
   if raw.get('attachments'):raise PublicationError('nonempty attachment metadata schema awaits review')
   r=fields(raw,REPLY,REPLY_DROP)
+  if r.get('authorId') in (None,''):r.pop('authorId',None)
   for k in ('id','publicReplyId','authorId'):identity(r,k)
   for k in ('content','repliedAt'):scalar(r,k,(str,))
   for k in ('inclusiveReplyCount','inclusiveVisibleReplyCount'):scalar(r,k,(int,))

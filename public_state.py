@@ -47,6 +47,8 @@ def validate_state(db,root):
    if row['key'] in {'prepared','last_checkpoint'}:timestamp(row['value'])
    elif row['key']=='parser_fix_empty_author_id_v1':
     if row['value']!='omit absent author identity; preserve display attribution':raise PublicationError('unreviewed parser migration')
+   elif row['key']=='parser_fix_reply_shapes_v1':
+    if row['value'] not in {'de.community.sonos.com','nl.community.sonos.com'}:raise PublicationError('invalid reply parser migration')
    elif row['key']=='parser_fix_empty_authors_v1':
     if row['value']!='normalize empty author list to empty map':raise PublicationError('unreviewed parser migration')
    elif row['key']=='unattended_recovery_gap':

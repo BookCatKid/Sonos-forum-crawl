@@ -32,3 +32,22 @@ def apply_empty_authors(root):
   if not any(json.loads(x[0]).get('filters',{}).get('category')==[229156] and json.loads(x[0]).get('pagination',{}).get('page')==1 for x in tasks):raise ValueError('empty-authors migration pending evidence mismatch')
   db.execute("DELETE FROM transport_stops WHERE host='en.community.sonos.com'");db.execute('INSERT INTO controller VALUES(?,?)',(key,'normalize empty author list to empty map'));db.commit();return ['en.community.sonos.com']
  finally:db.close()
+
+
+def apply_reply_shapes(root):
+ """Exact two diagnosed HTTP200 parser bugs; never clear access failures."""
+ from public_store import PublicStore
+ store=PublicStore(root)
+ targets=[('de.community.sonos.com','public-schema:unknown-field','2026-11-06T17:43:07.640151+00:00','34077'),('nl.community.sonos.com','public-schema:other','2026-11-06T17:43:13.042725+00:00','35106')]
+ changed=[]
+ for host,reason,at,topic in targets:
+  stop=store.db.execute('SELECT reason,at FROM transport_stops WHERE host=?',(host,)).fetchone()
+  if not stop or tuple(stop)!=(reason,at):continue
+  url='https://'+host+'/topic/'+topic+'/replies'
+  task=store.db.execute("SELECT request FROM tasks WHERE url=? AND state='pending' ORDER BY rowid LIMIT 1",(url,)).fetchone()
+  if not task or json.loads(task[0])!={'offset':0,'pageSize':20,'sort':'oldestFirst'}:raise ValueError('reply parser migration state differs')
+  with store.db:
+   store.db.execute('DELETE FROM transport_stops WHERE host=?',(host,))
+   store.db.execute('INSERT INTO controller VALUES(?,?)',('parser_fix_reply_shapes_v1',host))
+  changed.append(host)
+ store.db.close();return changed
