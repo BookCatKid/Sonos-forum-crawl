@@ -39,7 +39,10 @@ class Session:
     body=r.read(3000001);status=r.status;ctype=r.headers.get('Content-Type','')
   except urllib.error.HTTPError as e:
    # No credentials or request headers retained.
-   body=e.read(2000);self.evidence({'url':url,'status':e.code,'body_preview':body.decode(errors='replace')});raise Stop('HTTP '+str(e.code))
+   body=e.read(2000)
+   safe_headers={k:e.headers[k] for k in ('Content-Type','Server','Retry-After','CF-Ray','X-Cache') if e.headers and e.headers.get(k)}
+   final=urlsplit(e.geturl());final_url=final._replace(query='',fragment='',netloc=final.hostname or '').geturl()
+   self.evidence({'url':url,'final_url':final_url,'status':e.code,'response_headers':safe_headers,'body_preview':body.decode(errors='replace')});raise Stop('HTTP '+str(e.code))
   if len(body)>3000000:raise Stop('response too large')
   if any(m in body.lower() for m in [b'cf-chl-',b'challenge-platform',b'<title>access denied',b'<title>just a moment']):raise Stop('challenge page')
   return body,ctype,status
