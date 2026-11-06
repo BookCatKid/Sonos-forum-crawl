@@ -219,3 +219,25 @@ The next approval must cover the exact additional code push, activation of that
 manual-only workflow and its single bounded real-read run with automatic public
 checkpoint publication. It does not cover an ongoing crawl. The already verified
 synthetic release remains a test, not real captured content or a crawl baseline.
+
+## Hosted automation status
+
+The first manual hosted run completed on November 5,2026:15 real API receipts,
+209 topic rows, no host/resource stops. Its public committed release was
+independently downloaded/restored and checked. This is not a complete inventory.
+
+The scheduled path uses one hourly job at minute23 on a standard public hosted
+runner. Each job restores the unique real committed-chain tip (not a synthetic
+release), validates scope, stops on any incomplete/divergent generation, and
+reserves its next immutable release before reads. Maximum500 API task attempts,
+20-minute collection wall-clock budget,40-minute job timeout. All reads remain
+sequential at least1second apart or longer robots delay. Previous generations are
+never overwritten or deleted. After capture, public checkpoint upload/download,
+hashes and full fresh restore must pass before COMMITTED.
+
+Host stops persist and block unattended resumes; resource denials remain gaps and
+are never reset automatically. An empty phase pauses without a new generation or
+forum requests, pending inventory/phase review. No automatic phase or completeness
+bypass. There is no infinite same-job loop or retry of failed checkpoints. A hard
+runner kill can lose local work after baseline; the incomplete remote reservation
+prevents silently starting from old state. Recovery needs review, not deletion.

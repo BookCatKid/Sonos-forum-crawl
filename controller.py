@@ -48,7 +48,7 @@ def status(root):
  store=APIStore(root);r=store.report();r['disk_bytes']=usage(root);r['pending_by_kind']={r[0]:r[1] for r in store.db.execute("SELECT kind,count(*) FROM tasks WHERE state='pending' GROUP BY kind")};return r
 
 @exclusive
-def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,delay=1,session_factory=Session,host_filter=None,store_factory=APIStore,stop_reason=str):
+def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,delay=1,session_factory=Session,host_filter=None,store_factory=APIStore,stop_reason=str,max_seconds=None):
  if requests<1 or requests>500:raise ValueError('batch request budget must be1..500')
  if delay<1:raise ValueError('minimum delay1second')
  store=store_factory(root);store.db.execute('CREATE TABLE IF NOT EXISTS controller(key TEXT PRIMARY KEY,value TEXT)');store.db.execute('CREATE TABLE IF NOT EXISTS transport_stops(host TEXT PRIMARY KEY,reason TEXT,at TEXT)');store.db.commit()
@@ -60,8 +60,9 @@ def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,d
  if policy_file.exists():
   from scope_guard import load_scope,enforce
   enforce(store,load_scope(policy_file))
- sessions={};done=0;reason=None
+ sessions={};done=0;reason=None;started=time.monotonic()
  for i in range(requests):
+  if max_seconds is not None and time.monotonic()-started>=max_seconds:reason='batch wall clock budget reached';break
   if usage(root)>=byte_budget or shutil.disk_usage(root).free<free_floor:reason='disk budget reached';break
   rows=phase_tasks(store,phase[0]);rows=[r for r in rows if (not host_filter or urlsplit(r['url']).hostname==host_filter) and urlsplit(r['url']).hostname not in stopped_hosts];row=rows[0] if rows else None
   if not row:reason='phase queue empty; review before explicit next phase';break

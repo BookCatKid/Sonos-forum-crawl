@@ -1,0 +1,33 @@
+# Review only until real first-run checkpoint verification succeeds.
+name: Resumable public forum capture
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sonos-forum-capture
+  cancel-in-progress: false
+jobs:
+  capture:
+    if: github.repository == 'BookCatKid/Sonos-forum-crawl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest -q
+      - name: Resume verified committed tip, maximum five hundred sequential API tasks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: >-
+          python3 scheduled_capture.py
+          --repository "$REPOSITORY"
+          --run-id "$RUN_ID"
+          --root "$RUNNER_TEMP/forum-resume"

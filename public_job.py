@@ -20,8 +20,9 @@ def stop_code(error):
  if isinstance(error,OSError):return 'network'
  return 'unexpected-response'
 
-def resume_once(remote,source,generation,root,requests=15,run=run_batch):
- if requests<1 or requests>15:raise ValueError('review-only cap1..15')
+def resume_once(remote,source,generation,root,requests=15,run=run_batch,allow_large_batch=False):
+ cap=500 if allow_large_batch else 15
+ if requests<1 or requests>cap:raise ValueError('bounded API request cap exceeded')
  root=Path(root)
  if root.exists():raise ValueError('resume target must not exist')
  restore(source,remote,root);check_public(root)
