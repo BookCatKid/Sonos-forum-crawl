@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -26,8 +27,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-        run: >-
-          python3 scheduled_capture.py
-          --repository "$REPOSITORY"
-          --run-id "$RUN_ID"
-          --root "$RUNNER_TEMP/forum-resume"
+        run: |
+          python3 scheduled_capture.py --repository "$REPOSITORY" --run-id "$RUN_ID" --root "$RUNNER_TEMP/forum-resume" | tee "$RUNNER_TEMP/capture-result.json"
+      - name: Continue eligible capture automatically after minimum thirty-minute cadence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 continue_capture.py "$RUNNER_TEMP/capture-result.json"
