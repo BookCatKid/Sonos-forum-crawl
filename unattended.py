@@ -27,6 +27,7 @@ def store_has_tree(root,host):
 
 def enqueue_trees(store,hosts):
  for host in hosts:
+  store.task('https://'+host+'/groups',{},'phase-listing','GET')
   store.task('https://'+host+'/categoryV2/getAccessibleCategoriesTree',{'excludeFields':['description','thumbnailImage'],'type':[0]},'phase-listing')
 
 def prepare_action(root,action):

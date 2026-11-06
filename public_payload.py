@@ -102,7 +102,7 @@ def public_request(url,method,request):
  elif p.path=='/categoryV2/getAccessibleCategoriesTree':
   r=fields(request,['excludeFields','type'])
   if any(v not in ('description','thumbnailImage') for v in r.get('excludeFields',[])):raise PublicationError('unreviewed excluded tree fields')
- elif p.path in ('/productUpdates/topics','/events/events'):
+ elif p.path in ('/productUpdates/topics','/events/events') or __import__('group_discovery').group_path(p.path):
   if request:raise PublicationError('unexpected GET body')
  else:raise PublicationError('unreviewed public request route')
  return p
@@ -132,7 +132,9 @@ def project(e):
  e['request']=e.get('request') or {};p=public_request(e['url'],e['method'],e['request'])
  if type(e['status'])!=int or e['status']!=200:raise PublicationError('only successful public JSON receipts publish')
  b=e['response']
- if p.path=='/contentNavigation/topics':
+ if __import__('group_discovery').group_path(p.path):
+  b=__import__('group_discovery').project_group(b,e['url'])
+ elif p.path=='/contentNavigation/topics':
   b=fields(b,['topics','authors','total']);b['topics']=[topic(t) for t in b['topics']]
  elif p.path=='/categoryV2/getAccessibleCategoriesTree':
   b=fields(b,['0']);b={k:[category(c) for c in v] for k,v in b.items()}

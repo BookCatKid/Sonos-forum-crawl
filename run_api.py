@@ -46,9 +46,13 @@ class Session:
   if not self.token:raise Stop('anonymous CSRF bootstrap not found')
   self.evidence({'host':self.host,'stage':'bootstrap','status':'ok','token_found':True})
  def read(self,url,payload):
-  method='GET' if urlsplit(url).path in ['/productUpdates/topics','/events/events'] else 'POST';validate(url,method,payload)
+  from group_discovery import group_path,parse_group_page
+  method='GET' if group_path(urlsplit(url).path) or urlsplit(url).path in ['/productUpdates/topics','/events/events'] else 'POST';validate(url,method,payload)
   if not self.policy.can_fetch('*',url):raise Stop('robots excludes API task')
   body,ctype,status=self.request(url,payload if method=='POST' else None)
+  if group_path(urlsplit(url).path):
+   if 'text/html' not in ctype:raise Stop('group page not HTML')
+   return {'url':url,'method':'GET','request':{},'status':status,'response':parse_group_page(body,url)}
   if 'application/json' not in ctype:raise Stop('API returned non-JSON')
   return {'url':url,'method':method,'request':payload,'status':status,'response':json.loads(body)}
 def run(root,host,limit,delay=1,session_factory=Session):

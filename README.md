@@ -51,8 +51,9 @@ observed API listing totals; snapshots collected over time are not simultaneous.
 Older category-tree differences and inaccessible/outside-tree categories remain
 gaps. The fixed discovery plan covers86nodes/73leaves, including public groups,
 KB, curated content, updates and events. Accessible category trees are refreshed each cycle and newly evidenced public
-leaves enqueue supported listing/curation contracts. New public-group discovery
-from the separate group index remains to be automated. Never call this a full/up-to-date mirror while these gaps
+leaves enqueue supported listing/curation contracts. The separate public-group index is refreshed too. New group pages must explicitly
+report canSee/public and a supported listing contract before topics are queued.
+Only minimal structural fields are retained, not raw HTML/session props. Never call this a full/up-to-date mirror while these gaps
 or uncollected replies remain.
 
 One genuine GitHub schedule event first ran November6at09:31PST after the09:17

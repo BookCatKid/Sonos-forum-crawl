@@ -9,6 +9,8 @@ def unwrap(x):return json.loads(x['content']) if isinstance(x,dict) and 'content
 def validate(url,method,request):
  p=urlsplit(url)
  if p.scheme!='https' or p.hostname not in HOSTS or p.username or p.password or p.port not in [None,443]:raise ValueError('unsafe origin')
+ from group_discovery import group_path
+ if method=='GET' and group_path(p.path) and not p.query and not p.fragment:return p
  if method=='GET' and p.path in ['/productUpdates/topics','/events/events']:
   if any(k not in ['page','tab','type'] for k,v in parse_qsl(p.query)):raise ValueError('unsupported GET query')
   return p
