@@ -29,3 +29,18 @@ class FetchFailureTests(unittest.TestCase):
     def read(self,*a):raise Stop('HTTP 429')
    with tempfile.TemporaryDirectory() as d,patch('controller.time.sleep'):
     root=test_unattended.UnattendedTests().setup_state(d);s=PublicStore(root);s.task('https://de.community.sonos.com/contentNavigation/topics',{'sort':{},'pagination':{'page':2,'pageSize':25}},'phase-listing');s.db.commit();s.db.close();run_batch(root,1,session_factory=Fake,store_factory=PublicStore,stop_reason=stop_code);s=PublicStore(root);self.assertEqual(s.db.execute("select reason from transport_stops where host='de.community.sonos.com'").fetchone()[0],'HTTP 403' if bootstrap else 'HTTP 429');s.db.close()
+
+ def test_newly_enqueued_denied_category_never_fetched_in_same_batch(self):
+  from controller import run_batch
+  from run_api import Stop
+  from public_job import stop_code
+  calls=[]
+  with tempfile.TemporaryDirectory() as d,patch('controller.time.sleep'):
+   root=test_unattended.UnattendedTests().setup_state(d);s=PublicStore(root)
+   q={'sort':{},'filters':{'category':[123]},'pagination':{'page':1,'pageSize':25}}
+   s.task('https://de.community.sonos.com/contentNavigation/topics',q,'phase-listing');s.db.commit();row=s.db.execute("select * from tasks where state='pending'").fetchone();record(s,row,'HTTP 403','2026-11-06T23:40:00+00:00');s.db.close()
+   class Fake:
+    def __init__(self,*a):self.policy=None
+    def bootstrap(self):pass
+    def read(self,url,p):calls.append(p);raise Stop('HTTP 404')
+   run_batch(root,5,session_factory=Fake,store_factory=PublicStore,stop_reason=stop_code);self.assertEqual(calls,[])
