@@ -1,12 +1,29 @@
 {
-  "hosts": ["de.community.sonos.com", "en.community.sonos.com", "nl.community.sonos.com"],
+  "hosts": [
+    "de.community.sonos.com",
+    "en.community.sonos.com",
+    "nl.community.sonos.com"
+  ],
   "minimum_delay_seconds": 1,
   "anonymous_only": true,
   "text_scanning": false,
   "media_bytes": false,
-  "excluded_en_topic_ids": ["6935006", "4479975", "5219128", "5487455", "5936784", "6014182"],
-  "excluded_routes": ["https://en.community.sonos.com/ideas/topics?page=1"],
+  "excluded_en_topic_ids": [
+    "6935006",
+    "4479975",
+    "5219128",
+    "5487455",
+    "5936784",
+    "6014182"
+  ],
+  "excluded_routes": [
+    "https://en.community.sonos.com/ideas/topics?page=1",
+    "https://en.community.sonos.com/exclusive-229122"
+  ],
   "on_denial_throttle_or_challenge": "persist stop; no automatic reset or alternate route",
   "on_backup_or_restore_failure": "stop; never silently initialize empty",
-  "de_reviewed_timeout_retry_already_used": true
+  "de_reviewed_timeout_retry_already_used": true,
+  "excluded_en_category_ids": [
+    229122
+  ]
 }

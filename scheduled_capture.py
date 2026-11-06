@@ -19,6 +19,8 @@ def scheduled(remote,root,run_id,requests=500,resume=resume_once):
   state=Path(d)/'state';restore(source,remote,state);check_public(state)
   from parser_migration import apply_reply_shapes,apply_attachment_shapes
   apply_reply_shapes(state);apply_attachment_shapes(state)
+  from access_migration import apply_reviewed_resource_exclusion
+  apply_reviewed_resource_exclusion(state)
   action=cycle_action(state)
   if action=='blocked':return {'paused':True,'reason':'all hosts stopped; no automatic access retry','source_generation':source}
 
@@ -27,7 +29,7 @@ def scheduled(remote,root,run_id,requests=500,resume=resume_once):
  generation='checkpoint-'+stamp+'-'+str(run_id)
  def bounded(root,n,**kwargs):
   from parser_migration import apply,apply_empty_authors
-  apply(root);apply_empty_authors(root);apply_reply_shapes(root);apply_attachment_shapes(root)
+  apply(root);apply_empty_authors(root);apply_reply_shapes(root);apply_attachment_shapes(root);apply_reviewed_resource_exclusion(root)
   prepare_action(root,action)
   if gaps:
    store=PublicStore(root)

@@ -23,8 +23,21 @@ def permitted(url,policy):
 def enforce(store,policy):
  store.db.execute('CREATE TABLE IF NOT EXISTS policy_exclusions(task_id TEXT PRIMARY KEY,url TEXT,reason TEXT)')
  with store.db:
-  for row in store.db.execute("SELECT id,url FROM tasks WHERE state='pending'").fetchall():
-   if not permitted(row['url'],policy):
+  for row in store.db.execute("SELECT id,url,request FROM tasks WHERE state='pending'").fetchall():
+   if not permitted_task(store,row,policy):
     store.db.execute('INSERT OR REPLACE INTO policy_exclusions VALUES(?,?,?)',(row['id'],row['url'],'carried scope exclusion'))
     store.db.execute("UPDATE tasks SET state='failed' WHERE id=?",(row['id'],))
  return store.db.execute('SELECT count(*) FROM policy_exclusions').fetchone()[0]
+
+def permitted_task(store,row,policy):
+ if not permitted(row['url'],policy):return False
+ if urlsplit(row['url']).hostname!='en.community.sonos.com':return True
+ excluded=set(policy.get('excluded_en_category_ids',[]));q=json.loads(row['request'])
+ categories=q.get('filters',{}).get('category',[])+([q['categoryId']] if 'categoryId' in q else [])
+ if any(int(c) in excluded for c in categories):return False
+ if urlsplit(row['url']).path.startswith('/topic/'):
+  topic=urlsplit(row['url']).path.split('/')[2]
+  try:t=store.db.execute('SELECT raw_json FROM topic_rows WHERE host=? AND public_id=?',('en.community.sonos.com',topic)).fetchone()
+  except Exception:raise ValueError('cannot verify excluded topic category') from None
+  if t and json.loads(t[0]).get('categoryId') in excluded:return False
+ return True
