@@ -49,6 +49,9 @@ class ReleaseTransport:
    out.extend(rows)
    if len(rows)<100:return out
   raise RemoteError('asset inventory exceeds reviewed limit')
+ def workflow_run(self,run_id):
+  if type(run_id)!=int or run_id<1:raise ValueError('invalid run identity')
+  return json.loads(self.request('GET',self._api('/actions/runs/'+str(run_id))))
  def generations(self):
   out=[]
   for page in range(1,101):

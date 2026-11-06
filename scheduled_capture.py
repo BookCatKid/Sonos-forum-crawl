@@ -11,19 +11,14 @@ from controller import phase_tasks
 import tempfile,sqlite3
 
 def scheduled(remote,root,run_id,requests=500,resume=resume_once):
+ from recovery import recover_terminated
+ gaps=recover_terminated(remote)
  source=current_generation(remote)
- # Inspect the verified durable source before reserving another generation. A
- # finished/paused phase produces no new releases and no forum requests.
+ from unattended import cycle_action,prepare_action
  with tempfile.TemporaryDirectory() as d:
-  state=Path(d)/'state';restore(source,remote,state);check_public(state);store=PublicStore(state)
-  tables={r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-  stops={r[0] for r in store.db.execute('SELECT host FROM transport_stops')} if 'transport_stops' in tables else set()
-  phase=store.db.execute("SELECT value FROM controller WHERE key='phase'").fetchone()[0]
-  from urllib.parse import urlsplit
-  pending=[r for r in phase_tasks(store,phase) if urlsplit(r['url']).hostname not in stops]
-  store.db.close()
-  if not pending and stops:return {'paused':True,'reason':'remaining tasks blocked by persistent host stops','stopped_hosts':sorted(stops),'source_generation':source}
-  if not pending:return {'paused':True,'reason':'phase queue empty; inventory/phase review required','source_generation':source}
+  state=Path(d)/'state';restore(source,remote,state);check_public(state)
+  action=cycle_action(state)
+  if action=='blocked':return {'paused':True,'reason':'all hosts stopped; no automatic access retry','source_generation':source}
 
  stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
  if not str(run_id).isdigit():raise ValueError('numeric workflow run ID required')
@@ -31,6 +26,12 @@ def scheduled(remote,root,run_id,requests=500,resume=resume_once):
  def bounded(root,n,**kwargs):
   from parser_migration import apply,apply_empty_authors
   apply(root);apply_empty_authors(root)
+  prepare_action(root,action)
+  if gaps:
+   store=PublicStore(root)
+   with store.db:
+    for gap in gaps:store.db.execute('INSERT INTO controller VALUES(?,?)',('unattended_recovery_gap',gap['generation']))
+   store.db.close()
   return run_batch(root,n,max_seconds=1200,**kwargs)
  return resume(remote,source,generation,root,requests,allow_large_batch=True,run=bounded)
 

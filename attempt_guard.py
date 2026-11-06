@@ -23,7 +23,8 @@ def reserve(remote,source,generation):
  if not hasattr(remote,'generations'):raise RemoteError('remote attempt inventory required')
  # Only dedicated checkpoint tags belong here. Any partial or unrecognized
  # generation blocks capture; do not silently skip it and pick an older good one.
- inventory=remote.generations()
+ from recovery import abandoned
+ inventory=[g for g in remote.generations() if not abandoned(remote,g)]
  superseded=set()
  for g in inventory:
   try:

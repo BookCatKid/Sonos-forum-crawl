@@ -6,6 +6,8 @@ from generations import RemoteError
 
 def current_generation(remote):
  inventory=remote.generations();parents={};real=[]
+ from recovery import abandoned
+ inventory=[g for g in inventory if not abandoned(remote,g)]
  for g in inventory:
   try:
    marker=json.loads(remote.get(g,'COMMITTED'));index=remote.get(g,'index.json')

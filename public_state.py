@@ -49,6 +49,10 @@ def validate_state(db,root):
     if row['value']!='omit absent author identity; preserve display attribution':raise PublicationError('unreviewed parser migration')
    elif row['key']=='parser_fix_empty_authors_v1':
     if row['value']!='normalize empty author list to empty map':raise PublicationError('unreviewed parser migration')
+   elif row['key']=='unattended_recovery_gap':
+    if not re.fullmatch(r'checkpoint-\d{8}-\d{6}-\d+',row['value']):raise PublicationError('invalid recovery gap generation')
+   elif row['key']=='unattended_boundary':
+    if row['value'] not in {'listing integrity checked; drift and unavailable coverage retained','new refresh cycle; prior receipt history retained'}:raise PublicationError('unreviewed unattended boundary')
    elif row['key']=='phase':
     if row['value'] not in {'listing','replies'}:raise PublicationError('unknown phase')
    else:raise PublicationError('unreviewed controller metadata')
