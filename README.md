@@ -187,3 +187,35 @@ currently says public.
   preservation guarantee.
 - https://docs.github.com/en/organizations/managing-organization-settings/configuring-the-retention-period-for-github-actions-artifacts-and-logs-in-your-organization
   Artifacts/logs expire; default retention is 90 days.
+
+## Proposed next approval: first finite hosted batch
+
+Not executed or pushed. The local `finite_launch.py` and
+`review/first-batch-workflow.yml` propose one manual dispatch on the standard
+ubuntu-latest runner, 25-minute job timeout, 15 API-task attempts maximum, no cron,
+no second batch, no phase advance or replies. All three hosts can be bootstrapped,
+so there are at most six additional robots/home requests (21 application requests
+maximum, ordinary same-host redirects may add transport requests). Requests remain
+sequential at least one second apart or a longer robots delay. The existing
+8GB capture budget/2GB free-space stop stays in place.
+
+Before forum reads: offline initialize the exact source-pinned plan, upload a
+zero-content baseline, download/hash/restore-check it, reserve the new generation
+remotely, and verify the reservation. Incomplete prior generations stop launch.
+After the bounded reads: publish sanitized packed state, download and restore
+again, then COMMITTED. Upload failure leaves an incomplete remote reservation
+that blocks another run; no automatic retry or deletion. Hard termination can
+lose post-baseline local work, but cannot silently resume the old generation.
+Recovery requires an explicit review.
+
+First15 queue positions: DE/EN/NL product-update and event first pages, then DE
+categories223374/223383/223389/223391 and their curated widgets, then223393's first
+page. Continuations append after those initial tasks, not an unlimited traversal.
+Unknown public fields/attachments and carried excluded IDs stop before storage.
+401/403/404 keep a resource gap; throttles/challenges/network/robots stop the host.
+No alternate route or stop reset. No analytical text scanning or media downloads.
+
+The next approval must cover the exact additional code push, activation of that
+manual-only workflow and its single bounded real-read run with automatic public
+checkpoint publication. It does not cover an ongoing crawl. The already verified
+synthetic release remains a test, not real captured content or a crawl baseline.

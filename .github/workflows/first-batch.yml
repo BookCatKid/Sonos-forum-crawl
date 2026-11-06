@@ -1,0 +1,38 @@
+# Proposed activation path: .github/workflows/first-batch.yml
+# NOT ACTIVE HERE. Requires separate source push + real-read approval.
+name: First finite public forum batch
+on:
+  workflow_dispatch:
+    inputs:
+      generation:
+        description: Unique checkpoint-prefixed name, never reuse
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: sonos-forum-capture
+  cancel-in-progress: false
+jobs:
+  first-batch:
+    if: github.repository == 'BookCatKid/Sonos-forum-crawl'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Offline regression gate
+        run: python3 -m unittest -q
+      - name: Planned baseline, verified restore, at most fifteen API reads, final checkpoint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          GENERATION: ${{ inputs.generation }}
+        run: >-
+          python3 finite_launch.py
+          --repository "$REPOSITORY"
+          --generation "$GENERATION"
+          --root "$RUNNER_TEMP/sonos-first-batch"
