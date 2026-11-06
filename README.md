@@ -9,7 +9,10 @@ private-account data, access-control workarounds or spending.
 `capture.yml` starts at minute17and47each hour on the standard public GitHub
 runner. Eligible runs also dispatch one automatic successor no sooner than30minutes
 after their own start, skipping when another run is already queued/active.
-Cron is a recovery bootstrap if a runner dies before chaining. All-stopped state
+The successor step also runs after a failed capture, keeping the failed run red
+and letting the next bounded run verify/recover its immutable attempt. Missing
+results are recovery-required, never success. Cron is a recovery bootstrap if a
+runner is cancelled or dies before chaining. All-stopped state
 does not spin a chain. GitHub can delay/drop events; this is not a realtime SLA.
 Each run restores the verified committed checkpoint chain, performs at most500
 sequential tasks within20minutes, then uploads and independently restores/hashes

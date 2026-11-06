@@ -21,4 +21,8 @@ if __name__=='__main__':
   raw=remote.request(method,remote._api(path),None if data is None else json.dumps(data).encode())
   return json.loads(raw) if raw else {}
  import sys
- print(json.dumps(continue_once(api,os.environ['RUN_ID'],json.load(open(sys.argv[1])))))
+ try:
+  with open(sys.argv[1]) as f:result=json.load(f)
+  if not isinstance(result,dict):raise ValueError('result not object')
+ except (OSError,ValueError):result={'recovery_required':True}
+ print(json.dumps(continue_once(api,os.environ['RUN_ID'],result)))

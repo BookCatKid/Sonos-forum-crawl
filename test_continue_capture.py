@@ -15,3 +15,6 @@ class ChainTests(unittest.TestCase):
   api,c=self.api(True);r=continue_once(api,123,{},now=lambda:datetime.datetime.fromisoformat('2026-11-06T18:40:00+00:00'));self.assertFalse(r['chained']);self.assertFalse(any(x[0]=='POST'for x in c))
  def test_all_stopped_no_chain(self):
   api,c=self.api();self.assertFalse(continue_once(api,123,{'paused':True})['chained']);self.assertEqual(c,[])
+
+ def test_failed_capture_can_chain_recovery_without_faking_success(self):
+  api,c=self.api();r=continue_once(api,123,{'recovery_required':True},now=lambda:datetime.datetime.fromisoformat('2026-11-06T18:40:00+00:00'));self.assertTrue(r['chained']);self.assertEqual(sum(x[0]=='POST' for x in c),1)
