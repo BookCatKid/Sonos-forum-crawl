@@ -14,8 +14,8 @@ def fields(value,keep,drop=()):
 
 TOPIC='id publicId contentType content title topicUrl author categoryId categoryName categoryUrl publishedAt lastActivityAt replyCount inclusiveVisibleReplyCount hasBestAnswer lastPostId lastReplyPublicId'.split()
 TOPIC_DROP='avatar bugStatus ideaStatus featuredImage featuredImageAltText isNew isUnreadPostCountEnabled lastActivityAtRelative lastContributor likedOrVotedByCurrentUser likes productAreas publicLabel publishedAtDisplayText publishedAtRelative sticky timestampDisplayText unreadRepliesCount views votes'.split()
-REPLY='id publicReplyId authorId content children repliedAt inclusiveReplyCount inclusiveVisibleReplyCount isBestAnswer isPinnedReply url'.split()
-REPLY_DROP='attachments highlighted likedBy repliedAtDisplayText repliedAtTooltipText topLikedBy'.split()
+REPLY='attachments id publicReplyId authorId content children repliedAt inclusiveReplyCount inclusiveVisibleReplyCount isBestAnswer isPinnedReply url'.split()
+REPLY_DROP='highlighted likedBy repliedAtDisplayText repliedAtTooltipText topLikedBy'.split()
 META='depthLevel hasMore hasPrevious limit offset page pageSize totalCount'.split()
 AUTHOR_DROP='avatar badges isBanned postCount rank url userLevel userTitle likesReceived repliesMade showBadges showReputation signature'.split()
 
@@ -56,6 +56,15 @@ def topic(t):
  scalar(t,'hasBestAnswer',(bool,))
  return t
 
+def attachment_metadata(a):
+ # Public rendered-reference metadata only. Never fetch or execute source values.
+ a=fields(a,['type','source','source_thumb','file_uuid','file_original_name','id'])
+ if a.get('type') not in {'image','video'}:raise PublicationError('nonempty attachment metadata schema awaits review')
+ identity(a,'id')
+ for k in ('source','source_thumb','file_original_name'):scalar(a,k,(str,))
+ if a.get('file_uuid') is not None:raise PublicationError('nonempty attachment metadata schema awaits review')
+ return a
+
 def replies(c):
  c=fields(c,['metadata','result'])
  # UI-only next-page URL is redundant with offset/hasMore; never followed.
@@ -66,8 +75,11 @@ def replies(c):
   elif type(v)!=int or v<0:raise PublicationError('invalid pagination metadata')
  out=[]
  for raw in c['result']:
-  if raw.get('attachments'):raise PublicationError('nonempty attachment metadata schema awaits review')
+  if raw.get('attachments'):
+   for attachment in raw['attachments']:attachment_metadata(attachment)
   r=fields(raw,REPLY,REPLY_DROP)
+  if r.get('attachments'):r['attachments']=[attachment_metadata(a) for a in r['attachments']]
+  else:r.pop('attachments',None)
   if r.get('authorId') in (None,''):r.pop('authorId',None)
   for k in ('id','publicReplyId','authorId'):identity(r,k)
   for k in ('content','repliedAt'):scalar(r,k,(str,))

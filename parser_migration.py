@@ -51,3 +51,17 @@ def apply_reply_shapes(root):
    store.db.execute('INSERT INTO controller VALUES(?,?)',('parser_fix_reply_shapes_v1',host))
   changed.append(host)
  store.db.close();return changed
+
+
+def apply_attachment_shapes(root):
+ from public_store import PublicStore
+ store=PublicStore(root);changed=[]
+ for host,at,topic in [('de.community.sonos.com','2026-11-06T17:56:36.216859+00:00','6738729'),('nl.community.sonos.com','2026-11-06T17:57:36.032834+00:00','43838')]:
+  row=store.db.execute('SELECT reason,at FROM transport_stops WHERE host=?',(host,)).fetchone()
+  if not row or tuple(row)!=('public-schema:attachments',at):continue
+  task=store.db.execute("SELECT request FROM tasks WHERE url=? AND state='pending' ORDER BY rowid LIMIT 1",('https://'+host+'/topic/'+topic+'/replies',)).fetchone()
+  if not task or json.loads(task[0])!={'offset':0,'pageSize':20,'sort':'oldestFirst'}:raise ValueError('attachment parser migration state differs')
+  with store.db:
+   store.db.execute('DELETE FROM transport_stops WHERE host=?',(host,));store.db.execute('INSERT INTO controller VALUES(?,?)',('parser_fix_attachment_shapes_v1',host))
+  changed.append(host)
+ store.db.close();return changed

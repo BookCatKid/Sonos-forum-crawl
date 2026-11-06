@@ -25,8 +25,9 @@ EN is currently stopped after an ordinary anonymous403on a sitemap-linked
 category outside the anonymously discovered tree. No automatic reset, alternate
 route or retry occurs. Unrelated DE/NL capture continues. Six explicit EN topic
 exclusions and the prior denied Ideas route remain excluded by `scope.json`.
-Unknown public schemas fail closed. Nonempty reply attachment metadata still
-needs a schema review; no attachment/media bytes are collected. Profile extras,
+Unknown public schemas fail closed. Public image/video attachment reference metadata is retained after schema
+validation; other nonempty attachment shapes still require review. No
+attachment/media bytes are collected. Profile extras,
 viewer flags, engagement-user lists and session data are omitted.
 
 ## Recovery
