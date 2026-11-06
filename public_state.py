@@ -52,7 +52,7 @@ def validate_state(db,root):
  # public orchestration path must store reviewed codes, not arbitrary str(error).
  if 'transport_stops' in tables:
   for row in db.execute('SELECT * FROM transport_stops'):
-   if row['host'] not in HOSTS or row['reason'] not in {'HTTP 401','HTTP 403','HTTP 404','HTTP 429','HTTP 500','HTTP 502','HTTP 503','timeout','network','challenge','robots','unexpected-response'}:raise PublicationError('unreviewed stop metadata')
+   if row['host'] not in HOSTS or row['reason'] not in {'HTTP 401','HTTP 403','HTTP 404','HTTP 429','HTTP 500','HTTP 502','HTTP 503','timeout','network','challenge','robots','unexpected-response','public-schema'}:raise PublicationError('unreviewed stop metadata')
    timestamp(row['at'])
  if 'resource_stops' in tables:
   for row in db.execute('SELECT * FROM resource_stops'):

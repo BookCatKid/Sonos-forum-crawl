@@ -241,3 +241,11 @@ forum requests, pending inventory/phase review. No automatic phase or completene
 bypass. There is no infinite same-job loop or retry of failed checkpoints. A hard
 runner kill can lose local work after baseline; the incomplete remote reservation
 prevents silently starting from old state. Recovery needs review, not deletion.
+
+The first resumed run committed16 receipts/212 topics, then stopped DE on an
+unexpected response at category223396. That sticky DE stop is preserved. Jobs
+continue unrelated EN/NL tasks; they never clear or retry the stopped DE route.
+The Actions execution succeeded in saving its checkpoint, which does not mean
+the full batch captured500 tasks. Counts and stopped_hosts in job output are the
+collection state, not the green badge alone. Future schema stops have a distinct
+public-schema code; arbitrary exception text is not placed in public checkpoints.

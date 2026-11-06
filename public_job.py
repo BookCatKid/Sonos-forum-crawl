@@ -10,9 +10,11 @@ from controller import run_batch
 from run_api import Stop
 from automated_batch import BackupRequired
 from attempt_guard import reserve
+from public_payload import PublicationError
 
 def stop_code(error):
  s=str(error)
+ if isinstance(error,PublicationError):return 'public-schema'
  if s in {'HTTP 401','HTTP 403','HTTP 404','HTTP 429','HTTP 500','HTTP 502','HTTP 503'}:return s
  if 'challenge' in s:return 'challenge'
  if 'robots' in s:return 'robots'
@@ -40,7 +42,7 @@ def resume_once(remote,source,generation,root,requests=15,run=run_batch,allow_la
  except Exception as error:
   (root/'BACKUP_FAILED').write_text('checkpoint-failed\n')
   raise BackupRequired('remote checkpoint failed; no further collection') from error
- return {'captured_this_batch':result['captured_this_batch'],'phase':result['phase'],'reason':result['reason'],'committed_generation':generation}
+ return {'captured_this_batch':result['captured_this_batch'],'phase':result['phase'],'reason':result['reason'],'committed_generation':generation,'transport_stops':result.get('status',{}).get('transport_stops',[])}
 
 if __name__=='__main__':
  p=argparse.ArgumentParser();p.add_argument('--repository',required=True);p.add_argument('--source-generation',required=True);p.add_argument('--generation',required=True);p.add_argument('--root',type=Path,required=True);p.add_argument('--requests',type=int,default=15);a=p.parse_args()

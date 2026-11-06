@@ -45,7 +45,7 @@ def sync_standalone(root,planfile):
 
 def usage(root):return sum(p.stat().st_size for p in Path(root).rglob('*') if p.is_file())
 def status(root):
- store=APIStore(root);r=store.report();r['disk_bytes']=usage(root);r['pending_by_kind']={r[0]:r[1] for r in store.db.execute("SELECT kind,count(*) FROM tasks WHERE state='pending' GROUP BY kind")};return r
+ store=APIStore(root);r=store.report();r['disk_bytes']=usage(root);r['transport_stops']=[dict(x) for x in store.db.execute('SELECT * FROM transport_stops')] if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='transport_stops'").fetchone() else [];r['pending_by_kind']={r[0]:r[1] for r in store.db.execute("SELECT kind,count(*) FROM tasks WHERE state='pending' GROUP BY kind")};return r
 
 @exclusive
 def run_batch(root,requests,byte_budget=8_000_000_000,free_floor=2_000_000_000,delay=1,session_factory=Session,host_filter=None,store_factory=APIStore,stop_reason=str,max_seconds=None):
