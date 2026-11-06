@@ -28,7 +28,10 @@ def scheduled(remote,root,run_id,requests=500,resume=resume_once):
  stamp=datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
  if not str(run_id).isdigit():raise ValueError('numeric workflow run ID required')
  generation='checkpoint-'+stamp+'-'+str(run_id)
- def bounded(root,n,**kwargs):return run_batch(root,n,max_seconds=1200,**kwargs)
+ def bounded(root,n,**kwargs):
+  from parser_migration import apply
+  apply(root)
+  return run_batch(root,n,max_seconds=1200,**kwargs)
  return resume(remote,source,generation,root,requests,allow_large_batch=True,run=bounded)
 
 if __name__=='__main__':

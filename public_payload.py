@@ -35,7 +35,11 @@ def public_url(obj,key):
   if p.scheme!='https' or p.hostname not in HOSTS or p.username or p.password or (p.query and (key!='url' or any(k!='postid' or not v.isdigit() for k,v in parse_qsl(p.query)))) or (p.fragment and not (key=='url' and p.fragment.startswith('post') and p.fragment[4:].isdigit())):raise PublicationError('invalid public content URL')
 
 def author(a):
- a=fields(a,['id','name','username'],AUTHOR_DROP);identity(a,'id')
+ a=fields(a,['id','name','username'],AUTHOR_DROP)
+ # Anonymous/deleted attribution can have an empty public author ID. Omit the
+ # absent ID, retain public display text, never synthesize an identity.
+ if a.get('id') in (None,''):a.pop('id',None)
+ identity(a,'id')
  for k in ('name','username'):scalar(a,k,(str,))
  return a
 def topic(t):

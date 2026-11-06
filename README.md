@@ -249,3 +249,10 @@ The Actions execution succeeded in saving its checkpoint, which does not mean
 the full batch captured500 tasks. Counts and stopped_hosts in job output are the
 collection state, not the green badge alone. Future schema stops have a distinct
 public-schema code; arbitrary exception text is not placed in public checkpoints.
+
+Parser repair November5: DE/EN200listing responses can contain empty author.id.
+Omit an absent author ID while preserving public display attribution. Do not
+synthesize IDs or accept arbitrary nonnumeric IDs. Exact parser-created stops
+are migrated once with fixed host/reason/timestamp/pending-task checks; HTTP,
+throttle and challenge stops are never cleared by this migration. Migration is
+recorded in controller state and immutable checkpoint ancestry.

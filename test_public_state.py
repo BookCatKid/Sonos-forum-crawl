@@ -40,4 +40,9 @@ class StateTests(unittest.TestCase):
    p=Path(d);self.seed(p);e=test_public_payload.PublicPayloadTests().sample();e['response']['topics'][0]['publicId']='6935006';s=PublicStore(p);before=s.db.execute('SELECT count(*) FROM receipts').fetchone()[0]
    with self.assertRaises(PublicationError):s.ingest(e)
    self.assertEqual(s.db.execute('SELECT count(*) FROM receipts').fetchone()[0],before);s.db.close()
+ def test_empty_author_id_omitted_without_identity_fabrication(self):
+  e=test_public_payload.PublicPayloadTests().sample();e['response']['topics'][0]['author']['id']='';out=project(e);self.assertNotIn('id',out['response']['topics'][0]['author']);self.assertEqual(out['response']['topics'][0]['author']['username'],'public-name')
+ def test_nonempty_nonnumeric_author_id_still_rejected(self):
+  e=test_public_payload.PublicPayloadTests().sample();e['response']['topics'][0]['author']['id']='unreviewed'
+  with self.assertRaises(PublicationError):project(e)
 if __name__=='__main__':unittest.main()
