@@ -28,6 +28,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          set -euo pipefail
           python3 scheduled_capture.py --repository "$REPOSITORY" --run-id "$RUN_ID" --root "$RUNNER_TEMP/forum-resume" | tee "$RUNNER_TEMP/capture-result.json"
       - name: Continue eligible capture automatically after minimum thirty-minute cadence
         env:

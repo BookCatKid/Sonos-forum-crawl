@@ -15,7 +15,8 @@ class ReleaseTests(unittest.TestCase):
    raise AssertionError((method,url))
   r=ReleaseTransport('BookCatKid/Sonos-forum-crawl','fixture',req);self.assertFalse(r.exists('gen'));r.create('gen');r.put('gen','index.json',b'{}');self.assertEqual(r.get('gen','index.json'),b'{}')
   with self.assertRaises(RemoteError):r.put('gen','index.json',b'changed')
-  self.assertTrue(all('/BookCatKid/Sonos-forum-crawl/' in u for _,u,_ in calls));self.assertEqual(calls[-2][2],'download')
+  self.assertTrue(all('/BookCatKid/Sonos-forum-crawl/' in u for _,u,_ in calls));self.assertTrue(any(c[2]=='download' for c in calls))
+  before=len(calls);self.assertEqual(r.get('gen','index.json'),b'{}');self.assertEqual(len(calls),before)
  def test_bad_repository_or_missing_token(self):
   with self.assertRaises(ValueError):ReleaseTransport('../bad','fixture')
   with self.assertRaises(RemoteError):ReleaseTransport('owner/repo','')

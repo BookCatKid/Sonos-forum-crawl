@@ -30,7 +30,7 @@ def reserve(remote,source,generation):
   try:
    marker=json.loads(remote.get(g,'COMMITTED'));index=remote.get(g,'index.json')
    if hashlib.sha256(index).hexdigest()!=marker['index_sha256']:raise ValueError()
-  except Exception:raise RemoteError('unresolved remote generation requires recovery review') from None
+  except Exception as error:raise RemoteError('generation '+g+' verification failed: '+str(error)) from None
  for g in inventory:
   try:attempt=json.loads(remote.get(g,'ATTEMPT.json'))
   except (KeyError,FileNotFoundError):continue
