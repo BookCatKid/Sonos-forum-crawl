@@ -1,8 +1,8 @@
-# Review only until real first-run checkpoint verification succeeds.
+# Hourly native schedule; verified manual fallback remains until first schedule event.
 name: Resumable public forum capture
 on:
   schedule:
-    - cron: '23 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 permissions:
   contents: read
