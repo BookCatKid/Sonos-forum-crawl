@@ -21,6 +21,13 @@ class Session:
     return super().redirect_request(req,fp,code,msg,headers,newurl)
   self.opener=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar),Guard());self.token=None;self.policy=None
  def request(self,url,payload=None):
+  for attempt in range(3):
+   try:return self._request_once(url,payload)
+   except OSError:
+    self.evidence({'url':url,'stage':'idempotent transport retry','attempt':attempt+1})
+    if attempt==2:raise
+    time.sleep(5*(attempt+1))
+ def _request_once(self,url,payload=None):
   if urlsplit(url).hostname!=self.host:raise ValueError('wrong host')
   h={'User-Agent':'sonos-public-mirror/0.2 (bounded public preservation)','Accept':'application/json' if payload is not None else 'text/html'}
   if self.token:h.update({'X-CSRF-TOKEN':self.token,'X-Requested-With':'XMLHttpRequest'})
