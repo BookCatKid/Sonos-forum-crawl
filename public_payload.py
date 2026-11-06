@@ -40,7 +40,9 @@ def author(a):
  return a
 def topic(t):
  t=fields(t,TOPIC,TOPIC_DROP)
- if 'author' in t:t['author']=author(t['author'])
+ if 'author' in t:
+  try:t['author']=author(t['author'])
+  except PublicationError as e:raise PublicationError('topic.author: '+str(e)) from None
  for k in ('id','publicId','categoryId','lastPostId','lastReplyPublicId'):
   if t.get(k) not in (None,''):identity(t,k)
  for k in ('content','title','categoryName','publishedAt','lastActivityAt'):scalar(t,k,(str,))
@@ -151,6 +153,10 @@ def project(e):
   if k in b and (type(b[k])!=int or b[k]<0):raise PublicationError('invalid total count')
  if 'authors' in b:
   if not isinstance(b['authors'],dict):raise PublicationError('expected author map')
-  b['authors']={k:author(a) for k,a in b['authors'].items()}
+  out={}
+  for k,a in b['authors'].items():
+   try:out[k]=author(a)
+   except PublicationError as err:raise PublicationError('authors-map: '+str(err)) from None
+  b['authors']=out
  e['response']=b
  return e

@@ -14,7 +14,14 @@ from public_payload import PublicationError
 
 def stop_code(error):
  s=str(error)
- if isinstance(error,PublicationError):return 'public-schema'
+ if isinstance(error,PublicationError):
+  # Only enumerated diagnostic labels/known field names, never response values.
+  fixed={'nonempty attachment metadata schema awaits review':'attachments','invalid public content URL':'content-url','invalid public URL type':'url-type','unreviewed topic type':'topic-type','listing contains carried excluded identity; review boundary before storage':'excluded-id'}
+  if s in fixed:return 'public-schema:'+fixed[s]
+  known={'content','title','categoryName','publishedAt','lastActivityAt','replyCount','inclusiveVisibleReplyCount','hasBestAnswer','name','username','repliedAt','inclusiveReplyCount','isBestAnswer','isPinnedReply','startAt','endAt','location','timezoneName','type'}
+  if s.startswith('invalid field type: ') and s.split(': ',1)[1] in known:return 'public-schema:field-type:'+s.split(': ',1)[1]
+  if s.startswith('unreviewed fields:'):return 'public-schema:unknown-field'
+  return 'public-schema:other'
  if s in {'HTTP 401','HTTP 403','HTTP 404','HTTP 429','HTTP 500','HTTP 502','HTTP 503'}:return s
  if 'challenge' in s:return 'challenge'
  if 'robots' in s:return 'robots'

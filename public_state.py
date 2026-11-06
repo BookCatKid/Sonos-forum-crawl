@@ -52,7 +52,11 @@ def validate_state(db,root):
  # public orchestration path must store reviewed codes, not arbitrary str(error).
  if 'transport_stops' in tables:
   for row in db.execute('SELECT * FROM transport_stops'):
-   if row['host'] not in HOSTS or row['reason'] not in {'HTTP 401','HTTP 403','HTTP 404','HTTP 429','HTTP 500','HTTP 502','HTTP 503','timeout','network','challenge','robots','unexpected-response','public-schema'}:raise PublicationError('unreviewed stop metadata')
+   from public_job import stop_code
+   allowed={'HTTP 401','HTTP 403','HTTP 404','HTTP 429','HTTP 500','HTTP 502','HTTP 503','timeout','network','challenge','robots','unexpected-response','public-schema'}
+   allowed.update(stop_code(PublicationError(v)) for v in ['nonempty attachment metadata schema awaits review','invalid public content URL','invalid public URL type','unreviewed topic type','listing contains carried excluded identity; review boundary before storage','unreviewed fields:fixture','other'])
+   allowed.update('public-schema:field-type:'+v for v in ['content','title','categoryName','publishedAt','lastActivityAt','replyCount','inclusiveVisibleReplyCount','hasBestAnswer','name','username','repliedAt','inclusiveReplyCount','isBestAnswer','isPinnedReply','startAt','endAt','location','timezoneName','type'])
+   if row['host'] not in HOSTS or row['reason'] not in allowed:raise PublicationError('unreviewed stop metadata')
    timestamp(row['at'])
  if 'resource_stops' in tables:
   for row in db.execute('SELECT * FROM resource_stops'):
