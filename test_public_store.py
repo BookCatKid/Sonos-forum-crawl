@@ -34,4 +34,10 @@ class PublicStoreTests(unittest.TestCase):
    self.assertEqual({r[0] for r in store.db.execute('SELECT public_id FROM topic_rows')},{old,'8888888'})
    self.assertEqual(store.db.execute('SELECT count(*) FROM refreshed_tasks').fetchone()[0],1)
    store.db.close();self.assertEqual(check_public(root)['receipts_checked'],2)
+ def test_accessible_tree_queues_only_evidenced_leaf_ids(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);(root/'scope.json').write_bytes((Path(__file__).parent/'scope.json').read_bytes());s=PublicStore(root)
+   e={'url':'https://de.community.sonos.com/categoryV2/getAccessibleCategoriesTree','method':'POST','status':200,'request':{'excludeFields':['description','thumbnailImage'],'type':[0]},'response':{'0':[{'id':55,'url':'https://de.community.sonos.com/example-55','isContainer':False,'isKnowledgeBase':False,'supportedContentTypes':['question','conversation'],'visibleTopicsCount':12000,'children':[]}]}}
+   s.ingest(e);rows=s.db.execute("select url,request from tasks where state='pending'").fetchall();self.assertEqual(len(rows),3)
+   self.assertTrue(all('de.community.sonos.com' in r[0] for r in rows));s.db.close();check_public(root)
 if __name__=='__main__':unittest.main()

@@ -1,5 +1,6 @@
 """New public-safe captures only. No raw-session checkpoint conversion."""
 import gzip,json,sqlite3
+from urllib.parse import urlsplit
 from api_adapter import APIStore,validate
 from public_payload import project,public_request,PublicationError
 from scope_guard import load_scope,permitted
@@ -19,6 +20,8 @@ class PublicStore(APIStore):
   tid=hashlib.sha256((e['url']+json.dumps(e.get('request') or {},sort_keys=True)).encode()).hexdigest()
   prior=list(self.db.execute('SELECT task_id,host,public_id,raw_json FROM topic_observations WHERE task_id=?',(tid,)))
   result=super().ingest(e,topic_type)
+  if urlsplit(e['url']).path=='/categoryV2/getAccessibleCategoriesTree':
+   self.expand_tree(e)
   if prior:
    with self.db:
     self.db.executemany('INSERT OR IGNORE INTO topic_observations VALUES(?,?,?,?)',[tuple(r) for r in prior])
@@ -26,6 +29,27 @@ class PublicStore(APIStore):
     self.db.execute('DELETE FROM topic_rows WHERE host=?',(host,))
     self.db.execute('INSERT OR REPLACE INTO topic_rows SELECT host,public_id,raw_json FROM topic_observations WHERE host=? ORDER BY rowid',(host,))
   return result
+
+ def expand_tree(self,e):
+  """Only anonymous accessible-tree IDs, never sitemap guesses or private groups."""
+  host=urlsplit(e['url']).hostname
+  def walk(nodes):
+   for node in nodes:
+    if not node.get('isContainer'):
+     types=node.get('supportedContentTypes',[])
+     if not types or node.get('visibleTopicsCount') is None:raise PublicationError('unreviewed tree leaf contract')
+     base={'sort':{'sticky':'desc','lastActivityAt':'desc'},'filters':{'contentType':[],'productArea':[],'category':[int(node['id'])]},'pagination':{'page':1,'pageSize':25},'stripHtmlFromContent':False,'trimContentLength':0,'enableLanguageBasedCategoryFilter':False}
+     partitions=types if node['visibleTopicsCount']>=10000 else [None]
+     for typ in partitions:
+      q=json.loads(json.dumps(base))
+      if typ:q['filters']['contentType']=[typ]
+      self.task('https://'+host+'/contentNavigation/topics',q,'phase-listing')
+     if node.get('isKnowledgeBase'):
+      self.task('https://'+host+'/categoryV2/listReadableCategoryOrderTopics',{'categoryId':int(node['id'])},'phase-listing')
+      self.task('https://'+host+'/categoryV2/listReadableCategoryContent',{'categoryId':int(node['id']),'type':None,'pagination':{'page':1,'pageSize':25}},'phase-listing')
+     else:self.task('https://'+host+'/categoryV2/getReadableCuratedContent',{'categoryId':int(node['id']),'type':None,'pagination':{'page':1,'pageSize':25}},'phase-listing')
+    walk(node.get('children',[]))
+  with self.db:walk(e['response']['0'])
 
 def check_public(root):
  """Publication preflight: schema checks, not textual content analysis."""

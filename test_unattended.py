@@ -11,7 +11,7 @@ class UnattendedTests(unittest.TestCase):
   s.db.execute("INSERT INTO transport_stops VALUES('en.community.sonos.com','HTTP 403','2026-11-06T14:17:56+00:00')");s.db.commit();s.db.close();return root
  def test_auto_replies_never_clears_en_stop(self):
   with tempfile.TemporaryDirectory() as d:
-   root=self.setup_state(d);self.assertEqual(cycle_action(root),'replies');prepare_action(root,'replies');s=PublicStore(root)
+   root=self.setup_state(d);self.assertEqual(cycle_action(root),'discover');prepare_action(root,'discover');s=PublicStore(root);s.db.execute("update tasks set state='captured'");s.db.commit();s.db.close();self.assertEqual(cycle_action(root),'replies');prepare_action(root,'replies');s=PublicStore(root)
    self.assertEqual(s.db.execute("select value from controller where key='phase'").fetchone()[0],'replies');self.assertEqual(s.db.execute('select count(*) from transport_stops').fetchone()[0],1)
    self.assertFalse(any('en.community' in r[0] for r in s.db.execute("select url from tasks where kind='topic-replies'")));s.db.close();check_public(root)
  def test_reply_cycle_refreshes_then_requeues_roots(self):

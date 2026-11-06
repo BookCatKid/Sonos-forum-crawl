@@ -16,12 +16,24 @@ def cycle_action(root):
  pending=[r for r in phase_tasks(store,phase) if urlsplit(r['url']).hostname in hosts]
  store.db.close()
  if pending:return 'collect'
+ if phase=='listing' and any(not store_has_tree(root,h) for h in hosts):return 'discover'
  if not hosts:return 'blocked'
  return 'replies' if phase=='listing' else 'refresh'
 
+def store_has_tree(root,host):
+ store=PublicStore(root)
+ found=store.db.execute('SELECT 1 FROM tasks WHERE url=?',('https://'+host+'/categoryV2/getAccessibleCategoriesTree',)).fetchone()
+ store.db.close();return bool(found)
+
+def enqueue_trees(store,hosts):
+ for host in hosts:
+  store.task('https://'+host+'/categoryV2/getAccessibleCategoriesTree',{'excludeFields':['description','thumbnailImage'],'type':[0]},'phase-listing')
+
 def prepare_action(root,action):
  store=PublicStore(root);hosts=eligible_hosts(store)
- if action=='replies':
+ if action=='discover':
+  with store.db:enqueue_trees(store,hosts)
+ elif action=='replies':
   integrity=audit(root)
   if integrity['issues'] or integrity['malformed_current_topics']:raise ValueError('listing integrity audit failed')
   # Count drift and unavailable hosts remain explicit gaps, not completeness.
@@ -40,6 +52,7 @@ def prepare_action(root,action):
    for row in store.db.execute('SELECT id,url,state FROM tasks').fetchall():
     if urlsplit(row['url']).hostname not in hosts or row['state']=='failed':continue
     store.db.execute('UPDATE tasks SET state=? WHERE id=?',('stale' if is_reply(row['url']) else 'pending',row['id']))
+   enqueue_trees(store,hosts)
    store.db.execute("UPDATE controller SET value='listing' WHERE key='phase'")
    store.db.execute('INSERT INTO controller VALUES(?,?)',('unattended_boundary','new refresh cycle; prior receipt history retained'))
  elif action not in ('collect','blocked'):raise ValueError('invalid cycle action')
