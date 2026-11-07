@@ -90,7 +90,7 @@ def cmd_capture(args):
     publish_error = [None]
     prev_tag = [manifest_prev["tag"] if manifest_prev else None]
     last_seq = [since_seq if since_seq >= 0 else -1]
-    last_publish = [0.0]
+    last_publish = [time.time()]
 
     def do_publish():
         """Stage + publish an immutable snapshot of everything captured so
