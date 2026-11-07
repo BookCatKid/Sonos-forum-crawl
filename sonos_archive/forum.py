@@ -6,7 +6,6 @@ token, exactly like an unauthenticated browser. Any denial
 never retried or routed around — if the site says no, that host stops.
 """
 
-import base64
 import gzip
 import http.cookiejar
 import json
@@ -14,7 +13,6 @@ import re
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
 
 from .errors import Denied, HttpError, NetworkError, ShapeError
 
