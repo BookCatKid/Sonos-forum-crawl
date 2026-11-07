@@ -131,11 +131,18 @@ def standard_fixtures():
     return {
         ("GET", BASE + "/"): [resp(HOME, ctype="text/html")],
         ("POST", BASE + "/categoryV2/getAccessibleCategoriesTree"): [resp(TREE)],
+        ("GET", BASE + "/groups"): [resp(
+            '<html><a href="/groups/germany-229160">Germany</a>'
+            '<a href="/groups/france-229162">France</a></html>', ctype="text/html")],
         ("GET", BASE + "/sitemap.xml"): [resp(SITEMAP_INDEX, ctype="application/xml")],
         ("GET", BASE + "/sitemap-topics-1.xml"): [resp(SITEMAP_TOPICS, ctype="application/xml")],
         ("GET", BASE + "/productUpdates/topics?page=1"): [resp(STANDALONE)],
         ("GET", BASE + "/events/events?page=1"): [resp(EVENTS)],
-        ("POST", BASE + "/contentNavigation/topics"): [resp(LISTING_PAGE1), resp(LISTING_PAGE2)],
+        ("POST", BASE + "/contentNavigation/topics"): [
+            resp(LISTING_PAGE1), resp(LISTING_PAGE2),
+            resp({"topics": [], "total": 0}),  # group 229160
+            resp({"topics": [], "total": 0}),  # group 229162
+        ],
         ("POST", BASE + "/topic/5001/replies"): [resp(REPLIES_5001)],
         ("POST", BASE + "/topic/5002/replies"): [resp(REPLIES_5001)],
         ("POST", BASE + "/topic/5003/replies"): [resp(REPLIES_5001)],
@@ -215,13 +222,13 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(task["state"], "denied")
         # Everything else still completed around the denial.
         self.assertEqual(self.store.pending_count(HOST), 0)
-        self.assertEqual(self.store.counts()["topics"], 3)  # sitemap seeds only
+        self.assertEqual(self.store.counts()["topics"], 4)  # sitemap seeds + listing topic
         # Next run revives it and hits the host again (fixture queues are now
         # empty -> network errors -> the refreshed tasks are dead-lettered,
         # still no latching stop).
         crawler2, transport2 = make_crawler(self.store, fixtures)
         crawler2.run([HOST])
-        self.assertEqual(len(transport2.sent), 3)
+        self.assertEqual(len(transport2.sent), 4)  # bootstrap + tree + groups + feeds
         task = self.store.db.execute(
             "SELECT state FROM tasks WHERE kind='tree'").fetchone()
         self.assertEqual(task["state"], "dead")
@@ -237,7 +244,7 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(task["state"], "dead")
         self.assertTrue(crawler.report.errors)
         # Other work is unaffected: sitemap seeds still land.
-        self.assertEqual(self.store.counts()["topics"], 3)
+        self.assertEqual(self.store.counts()["topics"], 4)
 
     def test_resume_across_runs(self):
         # A finished run leaves nothing pending; the next run performs only
@@ -252,6 +259,7 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(sorted(sent), sorted([
             ("GET", BASE + "/"),                       # bootstrap for POSTs
             ("POST", BASE + "/categoryV2/getAccessibleCategoriesTree"),
+            ("GET", BASE + "/groups"),
             ("GET", BASE + "/productUpdates/topics?page=1"),
             ("GET", BASE + "/events/events?page=1"),
         ]))
@@ -267,6 +275,14 @@ class CrawlTests(unittest.TestCase):
         crawler.run([HOST])
         self.assertEqual(self.store.topic(HOST, "5002")["replies_state"], "gone")
         self.assertEqual(self.store.topic(HOST, "5001")["replies_state"], "done")
+
+    def test_groups_index_seeds_group_categories(self):
+        crawler, _t = make_crawler(self.store, standard_fixtures())
+        crawler.run([HOST])
+        for gid in ("229160", "229162"):
+            cat = self.store.category(HOST, gid)
+            self.assertIsNotNone(cat)
+            self.assertEqual(cat["done"], 1)
 
     def test_out_of_scope_host_rejected(self):
         crawler, _t = make_crawler(self.store, standard_fixtures())

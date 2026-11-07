@@ -16,8 +16,8 @@ from urllib.parse import urlsplit
 
 SCHEMA_VERSION = 2
 
-PRIORITY = {"tree": 10, "sitemap": 20, "sitemap_file": 25, "standalone": 30,
-            "listing": 40, "replies": 50}
+PRIORITY = {"tree": 10, "groups": 15, "sitemap": 20, "sitemap_file": 25,
+            "standalone": 30, "listing": 40, "replies": 50}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

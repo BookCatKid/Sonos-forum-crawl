@@ -122,6 +122,10 @@ class Crawler:
         for path in ("/productUpdates/topics?page=1", "/events/events?page=1"):
             self.store.revive_task(host, "standalone", path, base + path,
                                    at=now_iso())
+        # Public groups are categories too, but only listed on /groups (HTML),
+        # not in the accessible category tree.
+        self.store.revive_task(host, "groups", "groups", base + "/groups",
+                               at=now_iso())
         try:
             last_sitemap = float(self.store.meta(f"sitemap_{host}", "0"))
         except ValueError:
@@ -228,6 +232,25 @@ class Crawler:
             "stripHtmlFromContent": False,
             "trimContentLength": 0,
         }
+
+    GROUP_LINK_RE = re.compile(r'/groups/([a-z0-9-]+)-(\d{1,10})"')
+
+    def do_groups(self, host, row):
+        r = self.session(host).get("/groups", kind="groups", accept="text/html")
+        links = self.GROUP_LINK_RE.findall(r.text())
+        if not links:
+            raise ShapeError("groups page contained no group links")
+        for slug, gid in links:
+            self.store.upsert_category(host, {
+                "id": gid, "title": slug.replace("-", " "), "isContainer": False,
+                "url": "https://" + host + "/groups/" + slug + "-" + gid,
+            }, now_iso())
+            cat = self.store.category(host, gid)
+            if not cat["done"] or self._due(cat["refresh_after"]):
+                self.store.revive_task(
+                    host, "listing", gid,
+                    "https://" + host + "/contentNavigation/topics",
+                    canon(self._listing_body(gid, 1)), offset=1, at=now_iso())
 
     def do_sitemap(self, host, row):
         r = self.session(host).get("/sitemap.xml", kind="sitemap",
