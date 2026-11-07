@@ -1,39 +1,64 @@
-# Two bounded sequential runs per hour; access stops remain sticky.
-name: Resumable public forum capture
+name: capture
+
 on:
   schedule:
-    - cron: '17,47 * * * *'
+    # Three bounded runs per hour. Each run resumes where the last stopped and
+    # publishes an immutable snapshot release when it made progress.
+    - cron: "11,31,51 * * * *"
   workflow_dispatch:
+    inputs:
+      host:
+        description: "Limit to one host (e.g. en.community.sonos.com); empty = all"
+        required: false
+        type: string
+      max_requests:
+        description: "HTTP request budget for this run"
+        required: false
+        default: "240"
+        type: string
+      max_seconds:
+        description: "Time budget in seconds for this run"
+        required: false
+        default: "480"
+        type: string
+
 permissions:
-  contents: read
+  contents: write # required to create snapshot releases
+
 concurrency:
-  group: sonos-forum-capture
+  # Never overlap two capture runs; lineage is single-writer.
+  group: sonos-archive-capture
   cancel-in-progress: false
+
 jobs:
   capture:
-    if: github.repository == 'BookCatKid/Sonos-forum-crawl'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    permissions:
-      contents: write
-      actions: write
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          persist-credentials: false
-      - run: python3 -m unittest -q
-      - name: Resume verified committed tip, maximum five hundred sequential API tasks
+          python-version: "3.12"
+
+      - name: Run bounded capture and publish snapshot
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          python3 scheduled_capture.py --repository "$REPOSITORY" --run-id "$RUN_ID" --root "$RUNNER_TEMP/forum-resume" | tee "$RUNNER_TEMP/capture-result.json"
-      - name: Continue eligible capture automatically after minimum thirty-minute cadence
-        if: ${{ always() && !cancelled() }}
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-        run: python3 continue_capture.py "$RUNNER_TEMP/capture-result.json"
+          MAX_REQUESTS="${{ inputs.max_requests || '240' }}"
+          MAX_SECONDS="${{ inputs.max_seconds || '480' }}"
+          HOST="${{ inputs.host || '' }}"
+          ARGS=(--remote github --max-requests "$MAX_REQUESTS" --max-seconds "$MAX_SECONDS")
+          if [ -n "$HOST" ]; then
+            ARGS+=(--host "$HOST")
+          fi
+          # Exit codes: 0 clean/budget, 3 host denial persisted (not an error),
+          # 4 transient/fail-closed, 5 publish error.
+          python3 -m sonos_archive capture "${ARGS[@]}" || code=$?
+          code=${code:-0}
+          if [ "$code" -eq 3 ]; then
+            echo "::notice::A host denied access; stop state persisted. See run output."
+            exit 0
+          fi
+          exit "$code"

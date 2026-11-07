@@ -1,0 +1,19 @@
+User-agent: *
+
+Sitemap: https://de.community.sonos.com/feed/topics
+
+Disallow: /search/activity/recent
+
+Disallow: /search/activity/sincelastvisit
+
+Disallow: /topic/new
+
+Disallow: /inbox/overview
+
+Disallow: /inbox/conversation?
+
+Disallow: /badges
+
+Disallow: /search/activity/unanswered
+
+Disallow: /members/

@@ -1,8 +1,6 @@
 __pycache__/
 *.pyc
-data/
-checkpoints/
-*.sqlite*
-*.json.gz
-.env
-cookies*
+/archive/
+/.probe/
+/state/
+/tmp/

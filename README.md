@@ -1,81 +1,188 @@
-# Sonos forum crawl
+# Sonos Community Archive
 
-Ongoing anonymous public topic/reply capture for the EN, DE and NL Sonos forums.
-Full post text is preserved without text analysis. No sign-in, media downloads,
-private-account data, access-control workarounds or spending.
+An **anonymous, incremental, public archive** of the Sonos community forums:
 
-## Operation
+- `https://en.community.sonos.com` (English)
+- `https://de.community.sonos.com` (German)
+- `https://nl.community.sonos.com` (Dutch)
 
-`capture.yml` starts at minute17and47each hour on the standard public GitHub
-runner. Eligible runs also dispatch one automatic successor no sooner than30minutes
-after their own start, skipping when another run is already queued/active.
-The successor step also runs after a failed capture, keeping the failed run red
-and letting the next bounded run verify/recover its immutable attempt. Missing
-results are recovery-required, never success. Cron is a recovery bootstrap if a
-runner is cancelled or dies before chaining. All-stopped state
-does not spin a chain. GitHub can delay/drop events; this is not a realtime SLA.
-Each run restores the verified committed checkpoint chain, performs at most500
-sequential tasks within20minutes, then uploads and independently restores/hashes
-the new checkpoint before writing COMMITTED. The40minute job ceiling reserves
-backup time. Concurrency serializes runs. Requests are at least1second apart,
-or a longer robots delay. Release checkpoints are public, immutable to this
-collector, and never overwritten/deleted. GitHub owners can delete releases.
+It captures every publicly visible category, topic and reply through the
+forum's own public JSON API, stores the raw responses verbatim
+(content-addressed, gzip-compressed), and builds a queryable SQLite index plus
+readable JSONL exports from those captures. It runs unattended on GitHub
+Actions and publishes **immutable snapshot releases** via GitHub Releases.
 
-Listing integrity is checked before automatically queuing eligible-host replies.
-After replies finish, the next run refreshes known listings and reply roots.
-Historical topic-ID unions and immutable receipts survive page movement. New
-continuations follow observed API pagination. Changed snapshots are not inferred
-deletions. Count drift and inventory gaps do not silently become completeness.
+Python 3 standard library only. No third-party dependencies.
 
-EN is currently stopped after an ordinary anonymous403on a sitemap-linked
-category outside the anonymously discovered tree. No automatic reset, alternate
-route or retry occurs. Unrelated DE/NL capture continues. Six explicit EN topic
-exclusions and the prior denied Ideas route remain excluded by `scope.json`.
-Unknown public schemas fail closed. Public image/video attachment reference metadata is retained after schema
-validation; other nonempty attachment shapes still require review. No
-attachment/media bytes are collected. Profile extras,
-viewer flags, engagement-user lists and session data are omitted.
+## Scope & ethics (read this first)
 
-## Recovery
+- **Anonymous only.** No login, no credentials, no private or account-only
+  data, no session reuse from a real person. The crawler uses a fresh
+  anonymous cookie jar plus the site's own public CSRF token, exactly like an
+  unauthenticated browser visit.
+- **No access-control workarounds.** If the site denies access
+  (HTTP 401/403/407/429/451 or an anti-bot challenge page), the denial is
+  recorded, a stop state is persisted for that host, and the run exits with
+  status 3 — cleanly, without retrying around it. A stopped host is never
+  contacted again until an operator clears the stop with `--reset-host`.
+- **No media/attachment bytes.** Attachment *metadata* returned in JSON
+  (filenames, URLs) is preserved; the files themselves are never downloaded.
+- **Politeness.** `robots.txt` is fetched, parsed (including `Crawl-delay`)
+  and obeyed per request. Requests are spaced at least 1 second apart per
+  host. A descriptive User-Agent identifies the archive; set a real contact
+  URL in `config.json` → `project.contact` / `project.user_agent` before
+  running this in production.
+- **Explicit do-not-crawl list** (in `config.json`):
+  - EN topic IDs `6935006, 4479975, 5219128, 5487455, 5936784, 6014182` are
+    never fetched for detail/replies and are excluded from index and exports
+    (matched on both the public id and the internal id).
+  - `https://en.community.sonos.com/ideas/topics?page=1` is on the forbidden
+    route list and is never requested (in fact *no* query strings are allowed).
+- **Scope allow-list.** Only HTTPS, only the three hosts, and only these
+  routes: `GET /`, `GET /robots.txt`, `GET /sitemap.xml`,
+  `GET /sitemap-structure.xml`, `POST /categoryV2/getAccessibleCategoriesTree`,
+  `POST /contentNavigation/topics`, `POST /topic/<publicId>/replies`.
+  Everything else raises a scope error before a request is even attempted.
+- **Never fabricate success.** Missing data is recorded as missing, never as
+  empty. `coverage.json` says exactly what is complete, partial, denied or
+  pending.
 
-An immutable ATTEMPT reservation precedes forum reads. A killed hosted run can
-leave partial assets. The next run verifies its exact GitHub workflow run has
-terminated, fresh-restores its committed parent, and appends ABANDONED.json with
-an explicit uncommitted capture-gap record. It never deletes that attempt or
-pretends the lost in-flight reads were saved. The new committed lineage records
-the gap. Active runs, unknown/manual partial attempts, bad ancestry, failed
-parent restore, and malformed recovery markers still stop collection. Access
-stops are never cleared by recovery. Expiring job logs are not the corpus.
+## Architecture
 
-## Current evidence and limits
-
-The November6discovery checkpoint contains88,386distinct historical topic IDs
-and3,658successful JSON receipts, before any reply collection. All receipt hashes
-and projected identities were checked after fresh remote restore. EN sitemap IDs
-are covered except explicit exclusions. DE/NL recent100-item feeds are covered,
-but are not independent full inventories. Historical unions match maximum
-observed API listing totals; snapshots collected over time are not simultaneous.
-Older category-tree differences and inaccessible/outside-tree categories remain
-gaps. The fixed discovery plan covers86nodes/73leaves, including public groups,
-KB, curated content, updates and events. Accessible category trees are refreshed each cycle and newly evidenced public
-leaves enqueue supported listing/curation contracts. The separate public-group index is refreshed too. New group pages must explicitly
-report canSee/public and a supported listing contract before topics are queued.
-Only minimal structural fields are retained, not raw HTML/session props. Never call this a full/up-to-date mirror while these gaps
-or uncollected replies remain.
-
-One genuine GitHub schedule event first ran November6at09:31PST after the09:17
-schedule. This proves native triggering, not indefinite reliable cadence.
-
-## Verification
-
-```sh
-python3 -m unittest -q
+```
+config.json      all scope / politeness / do-not-crawl / budget rules
+sonos_archive/
+  config.py      config.json -> validated Config dataclass
+  errors.py      typed errors with stable exit codes
+  scope.py       request allow-list + do-not-crawl enforcement
+  robots.py      small strict robots.txt parser (rules + crawl-delay)
+  net.py         urllib transport, anonymous session, CSRF, denial detection,
+                 FixtureTransport for fully-offline replay
+  schema.py      strict fail-closed validators for API response shapes
+  store.py       SQLite index + content-addressed raw blob store (WAL,
+                   committed per record -> a killed run loses nothing committed)
+  crawler.py     bounded resumable task-queue crawler (categories -> sitemap
+                   -> topic backfill/refresh -> replies)
+  export.py      topics.jsonl / replies.jsonl / raw_provenance.jsonl /
+                 coverage.json derived from the index
+  snapshot.py    immutable snapshot build + verify + LocalRemote +
+                 GithubRemote (draft release -> upload -> publish)
+  cli.py         `python3 -m sonos_archive` entry point
 ```
 
-Tests cover parsing, stop/scope rules, public projection, capture-union refresh,
-immutable checkpoints, restore failures, automatic phases/cycles and terminated
-hosted-attempt recovery. Tests do not establish complete live coverage.
+### How a run works
 
-Public sources: the forums' robots files, anonymously accessible category/API
-surfaces, https://en.community.sonos.com/sitemap.xml and DE/NL `/feed/topics`.
-Scheduling caveats: https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule
+1. **Restore.** The latest published snapshot's `state.tar.gz` is downloaded
+   and its embedded `index.sqlite` is extracted into a temp archive root.
+2. **Gate.** Per host: cached robots rules (or fetch `robots.txt`), crawl-delay
+   applied to the pacing gate, persisted stop state respected.
+3. **Crawl.** A priority task queue (SQLite `tasks` table) drives: category
+   tree -> sitemap structure seeds -> per-category topic backfill -> per-topic
+   replies -> periodic page-1 refreshes and daily full rescans. Each request is
+   scope-checked, robots-checked, paced (>1s/host), then the raw response is
+   stored verbatim *before* its projection into the index is attempted.
+4. **Publish (all-or-nothing).** A snapshot is staged fully
+   (`state.tar.gz` = index + exports + coverage; `raw.tar.gz` = only the raw
+   blobs added since the last snapshot; `manifest.json` = hashes, counts,
+   coverage, lineage). On GitHub it is created as a **draft** release, all
+   assets are uploaded and digest-checked, and only then is the draft
+   published. Locally the staging dir is verified then atomically renamed.
+   Nothing is ever rewritten or deleted once published; each manifest links to
+   its parent (`previous`), forming an auditable chain.
+
+A killed or cancelled run cannot corrupt state: every index write commits
+immediately (WAL + FULL sync), and a half-finished publish leaves at most a
+draft release or a `.staging-*` directory, both harmless and never mistaken
+for a snapshot.
+
+### Data layout
+
+Working archive root (per run, restored/built from snapshots):
+
+```
+index.sqlite            SQLite index + resumable state (see tables below)
+raw/sha256/ab/<sha>.gz  content-addressed raw response bodies (gzip)
+```
+
+Snapshot (published to GitHub Releases as tag `snapshot-NNNNNN`):
+
+```
+state.tar.gz            index.sqlite + topics.jsonl + replies.jsonl +
+                        raw_provenance.jsonl + coverage.json
+raw.tar.gz              raw/sha256/... blobs added since the previous snapshot
+manifest.json           format, sequence, tag, lineage, asset hashes, counts,
+                        coverage, scope declaration
+manifest.sha256         checksum of manifest.json
+```
+
+SQLite tables: `hosts` (per-host state incl. persisted stop reasons),
+`categories`, `topics` (incl. `replies_state`/`replies_offset` resume cursors),
+`replies` (incl. `children_expected`/`children_missing` accounting),
+`authors`, `captures` (one row per request: request+response metadata,
+blob sha, kind, context — the provenance spine), `denials`,
+`protocol_errors`, `excluded_topics`, `tasks`, `notes`, `meta`.
+
+Exports (`topics.jsonl`, `replies.jsonl`) carry full metadata — ids, host,
+category, title, author display name, timestamps, url, content type,
+reply counts — plus a `provenance` object identifying the exact capture
+(request method/url/body, status, blob path) that produced each record.
+
+## Coverage (truthful)
+
+This is a **partial incremental archive** unless
+`coverage.is_complete_mirror` is `true` in `coverage.json` / the manifest —
+which additionally requires zero pending/blocked tasks and zero known missing
+nested replies. Known gaps:
+
+- **Nested replies can be truncated by the API.** The replies endpoint returns
+  at most one visible child per level (even with `depthLevel` raised). We
+  record `children_expected` vs captured children per reply and count the
+  shortfall as `missing_nested_replies` in coverage.
+- A stopped host (denial/challenge/fail-closed schema error) freezes its
+  coverage until an operator resets it.
+- Topics on the do-not-crawl list are deliberately absent.
+- Topics whose replies endpoint 404s are marked `replies_state = "gone"`.
+
+## Usage
+
+```
+python3 -m sonos_archive capture [--host en.community.sonos.com] \
+    [--max-requests 240] [--max-seconds 480] \
+    [--remote auto|local|github] [--archive-dir archive] \
+    [--reset-host en.community.sonos.com] [--no-publish] [--fixtures file.json]
+
+python3 -m sonos_archive status   [--remote ...] [--archive-dir ...]
+python3 -m sonos_archive verify   [--snapshot-dir dir] [--shallow]
+python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --out dir
+```
+
+`--remote auto` picks GitHub Releases when `GITHUB_TOKEN` and
+`GITHUB_REPOSITORY` are set (as on Actions), else the local filesystem backend
+(`archive/snapshots/`). `--fixtures` replays recorded responses with zero live
+network — used by tests and for offline runs.
+
+Exit codes: `0` clean/budget-reached · `2` config/scope · `3` denial persisted
+(clean, non-zero) · `4` transient/schema/integrity · `5` publish.
+
+## GitHub Actions
+
+- `.github/workflows/capture.yml` — scheduled 3×/hour plus `workflow_dispatch`
+  (`host`, `max_requests`, `max_seconds` inputs); `concurrency` group prevents
+  overlapping runs; `contents: write` for release publishing. Exit 3 (denial)
+  is reported as a notice, not a failure.
+- `.github/workflows/ci.yml` — compile check + `python3 -m unittest -q`
+  (offline only) on push/PR.
+
+## Testing
+
+```
+python3 -m unittest -q        # from the repo root, fully offline
+```
+
+The suite covers: config/scope validation and the do-not-crawl list,
+robots parsing/gating and crawl-delay, pacing, denial & challenge
+stop-and-persist, raw capture + index projection, checkpoint resume (incl.
+mid-topic reply cursors), killed-run durability, interrupted-publish
+recovery, snapshot immutability and lineage, tamper detection, the GitHub
+publish flow (via an in-memory fake API), malformed/unknown schema
+fail-closed, and real recorded API fixtures.
