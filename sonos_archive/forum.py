@@ -2,8 +2,8 @@
 
 One ``Session`` per host: a fresh cookie jar plus the site's own public CSRF
 token, exactly like an unauthenticated browser. Any denial
-(401/403/407/429/451 or an anti-bot challenge page) raises ``Denied`` and is
-never retried or routed around — if the site says no, that host stops.
+(401/403/407/429/451 or an anti-bot challenge page) raises ``Denied``; the
+task is retried after other work rather than latching a stop.
 """
 
 import gzip

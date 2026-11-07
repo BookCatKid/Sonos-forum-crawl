@@ -227,7 +227,7 @@ def build_parser():
         s.add_argument("--archive-dir", default="archive")
         s.add_argument("--remote", choices=["auto", "local", "github"], default="auto")
 
-    c = sub.add_parser("capture", help="bounded capture + publish a snapshot")
+    c = sub.add_parser("capture", help="crawl until the queue drains; publish snapshots")
     common(c)
     c.add_argument("--host", action="append")
     c.add_argument("--run-id", default="manual")

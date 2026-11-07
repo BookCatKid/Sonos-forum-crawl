@@ -30,17 +30,16 @@ Python 3 standard library only. No third-party dependencies.
   site wants this archive gone, a persistent 403 wall is the answer and the
   corpus so far stays intact.
 - **No robots.txt ceremony.** Requests go out as fast as the connection
-  allows. This is a small public dataset; if the platform objects, it can
-  deny access — which is recorded.
+  allows. If the platform objects, it can deny access; denials are recorded.
 - **Honest coverage.** `coverage.json` states exactly what is complete,
   pending, denied or missing. `is_complete_mirror` is only ever `true` when
   every leaf category is fully listed, zero tasks are pending/denied and no
   nested replies are known missing.
 
-## Architecture (~1,300 lines)
+## Architecture
 
 ```
-config.json            hosts, user-agent, timeouts — nothing else
+config.json            hosts, user-agent, timeouts
 sonos_archive/
   errors.py            typed failures
   forum.py             urllib transport, anonymous session + CSRF, denial
@@ -71,12 +70,12 @@ tests/test_archive.py  offline suite against a scripted transport
    are revived next run; failed tasks are dead-lettered, never blocking the
    queue.
 4. **Publish.** Every `--checkpoint-seconds` (default 240) and at the end of
-   a run, a snapshot is staged — `state.tar.gz` (index + exports + coverage),
-   `raw.tar.gz` (only the blobs added since the last snapshot),
-   `manifest.json` + `manifest.sha256` — and published. On GitHub it's a
-   draft release, assets uploaded and size-checked, then the draft flag
-   clears. Published snapshots are never modified or deleted; each manifest
-   links to its parent (`previous`).
+   a run, a snapshot is staged (`state.tar.gz` = index + exports + coverage;
+   `raw.tar.gz` = blobs added since the last snapshot; `manifest.json` +
+   `manifest.sha256`) and published. On GitHub it's a draft release, assets
+   uploaded and size-checked, then the draft flag clears. Published
+   snapshots are never modified or deleted; each manifest links to its
+   parent (`previous`).
 
 ### Data layout
 
@@ -124,7 +123,7 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
   endpoint returns at most 1 child per level (`pageSize: 1`, `hasMore`), and
   no anonymous parameter combination unlocks further siblings. Each reply's
   `inclusiveVisibleReplyCount` is compared against what was captured and the
-  shortfall is counted as `missing_nested_replies` — never silently dropped.
+  shortfall is counted as `missing_nested_replies`, never silently dropped.
 - A topic whose replies endpoint 404s is marked `replies_state = "gone"`.
 - Denied tasks are retried next run; a persistent denial shows up as
   `denials` + `denied_tasks` in coverage.
@@ -137,7 +136,7 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
 python3 -m unittest -q
 ```
 
-Offline only — a scripted `FixtureTransport` replays canned responses. Tests
+Offline only. A scripted `FixtureTransport` replays canned responses. Tests
 cover the full crawl flow, denial retry/yield behaviour, schema fail-closed
 dead-lettering, resume across runs, snapshot publish/restore round-trip,
 incremental raw tars, tamper detection, immutability, and the events feed
