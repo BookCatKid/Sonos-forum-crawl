@@ -41,6 +41,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Offline regression gate
+        run: python3 -m unittest -q
+
       - name: Run bounded capture and publish snapshot
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
