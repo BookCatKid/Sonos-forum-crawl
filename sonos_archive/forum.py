@@ -191,18 +191,5 @@ class Session:
         raise ShapeError("home page did not contain a recognisable csrftoken field")
 
 
-def decode_entry_body(b64):
-    return base64.b64decode(b64)
-
-
 def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def sha256_text(s):
-    import hashlib
-    return hashlib.sha256(s.encode()).hexdigest()
-
-
-def url_host(url):
-    return (urlsplit(url).hostname or "").lower()
