@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -91,30 +92,45 @@ def cmd_capture(args):
     prev_tag = [manifest_prev["tag"] if manifest_prev else None]
     last_seq = [since_seq if since_seq >= 0 else -1]
     last_publish = [time.time()]
+    publish_lock = threading.Lock()
+    publish_thread = [None]
 
     def do_publish():
         """Stage + publish an immutable snapshot of everything captured so
-        far. Called periodically so a killed run loses at most a few
-        minutes of work."""
-        stage = Path(tempfile.mkdtemp(prefix=".staging-", dir=args.archive_dir))
+        far. Runs in a background thread so the crawl never waits on the
+        DB backup, tar builds or the upload. Uses its own SQLite connection:
+        connection objects are thread-bound."""
+        if not publish_lock.acquire(blocking=False):
+            return  # a publish is already in flight
+        reader = None
         try:
-            stage, manifest = publish.build_snapshot(
-                store, hosts, stage, prev_tag[0], last_seq[0], crawler.run_id)
-            manifest = remote.publish(stage, manifest)
-            prev_tag[0] = manifest["tag"]
-            last_seq[0] = store.last_capture_seq()
-            last_publish[0] = time.time()
-            published.append(manifest["tag"])
-            print(f"published {manifest['tag']}", file=sys.stderr)
-        except Exception as e:
-            publish_error[0] = str(e)
-            print(f"publish failed: {e}", file=sys.stderr)
-            shutil.rmtree(stage, ignore_errors=True)
+            stage = Path(tempfile.mkdtemp(prefix=".staging-", dir=args.archive_dir))
+            try:
+                reader = Store(work)  # separate connection to the same file (WAL)
+                stage, manifest = publish.build_snapshot(
+                    reader, hosts, stage, prev_tag[0], last_seq[0], crawler.run_id)
+                manifest = remote.publish(stage, manifest)
+                prev_tag[0] = manifest["tag"]
+                last_seq[0] = reader.last_capture_seq()
+                last_publish[0] = time.time()
+                published.append(manifest["tag"])
+                print(f"published {manifest['tag']}", file=sys.stderr)
+            except Exception as e:
+                publish_error[0] = str(e)
+                print(f"publish failed: {e}", file=sys.stderr)
+                shutil.rmtree(stage, ignore_errors=True)
+        finally:
+            if reader is not None:
+                reader.close()
+            publish_lock.release()
 
     def after_task():
         if not args.no_publish and \
                 time.time() - last_publish[0] >= args.checkpoint_seconds:
-            do_publish()
+            t = threading.Thread(target=do_publish, daemon=True)
+            publish_thread[0] = t
+            t.start()
+            last_publish[0] = time.time()  # timer resets on dispatch, not completion
 
     transport_factory = (
         _fixture_transport(args.fixtures) if args.fixtures
@@ -124,11 +140,17 @@ def cmd_capture(args):
                       after_task=after_task)
     crawler.run(hosts)
 
-    if not args.no_publish and store.counts()["captures"] > 0 and not published:
-        do_publish()
-    elif not args.no_publish and last_seq[0] < store.last_capture_seq():
-        # Publish once more if anything was captured after the last checkpoint.
-        do_publish()
+    # Final publish: wait for any in-flight thread, then publish whatever was
+    # captured since the last checkpoint and wait for that too.
+    if not args.no_publish:
+        if publish_thread[0] is not None:
+            publish_thread[0].join()
+        if last_seq[0] < store.last_capture_seq():
+            do_publish()
+        # do_publish runs inline when the lock is free, so just wait for any
+        # thread it may have spawned via after_task bookkeeping.
+        if publish_thread[0] is not None and publish_thread[0].is_alive():
+            publish_thread[0].join()
 
     store.close()
     report = crawler.report.to_dict()
