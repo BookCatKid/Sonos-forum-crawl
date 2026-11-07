@@ -1,3 +1,3 @@
-"""Anonymous, incremental public archive of the Sonos community forums."""
+"""Anonymous incremental archive of the EN/DE/NL Sonos community forums."""
 
-__version__ = "0.1.0"
+__version__ = "2.0"

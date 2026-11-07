@@ -1,94 +1,10 @@
 {
-  "schema_version": 1,
-  "project": {
-    "name": "Sonos Community Archive",
-    "description": "Anonymous, incremental, public archive of the EN/DE/NL Sonos community forums.",
-    "contact": "https://github.com/BookCatKid/Sonos-forum-crawl/issues",
-    "user_agent": "SonosCommunityArchive/1.0 (anonymous public forum archive; +https://github.com/BookCatKid/Sonos-forum-crawl; contact: https://github.com/BookCatKid/Sonos-forum-crawl/issues)",
-    "robots_product_token": "sonoscommunityarchive"
-  },
   "hosts": [
-    {
-      "host": "en.community.sonos.com",
-      "base_url": "https://en.community.sonos.com",
-      "locale": "en"
-    },
-    {
-      "host": "de.community.sonos.com",
-      "base_url": "https://de.community.sonos.com",
-      "locale": "de"
-    },
-    {
-      "host": "nl.community.sonos.com",
-      "base_url": "https://nl.community.sonos.com",
-      "locale": "nl"
-    }
+    "en.community.sonos.com",
+    "de.community.sonos.com",
+    "nl.community.sonos.com"
   ],
-  "politeness": {
-    "min_delay_seconds": 1.0,
-    "timeout_seconds": 30.0,
-    "robots_cache_seconds": 86400
-  },
-  "budget": {
-    "default_max_requests": 300,
-    "default_max_seconds": 780
-  },
-  "discovery": {
-    "category_types": [0, 1],
-    "use_sitemap_structure": true,
-    "topics_page_size": 25,
-    "replies_page_size": 20
-  },
-  "crawl": {
-    "refresh_interval_seconds": 900,
-    "full_rescan_seconds": 86400,
-    "max_pages_per_category": 2000,
-    "max_task_attempts": 3
-  },
-  "endpoints": {
-    "categories_path": "/categoryV2/getAccessibleCategoriesTree",
-    "topics_path": "/contentNavigation/topics",
-    "replies_path_template": "/topic/{public_id}/replies"
-  },
-  "scope": {
-    "allowed_hosts": [
-      "en.community.sonos.com",
-      "de.community.sonos.com",
-      "nl.community.sonos.com"
-    ],
-    "allowed_get_paths": [
-      "/",
-      "/robots.txt",
-      "/sitemap.xml",
-      "/sitemap-structure.xml"
-    ],
-    "allowed_post_paths": [
-      "/categoryV2/getAccessibleCategoriesTree",
-      "/contentNavigation/topics",
-      "/topic/{public_id}/replies"
-    ],
-    "forbidden_routes": [
-      "https://en.community.sonos.com/ideas/topics?page=1"
-    ],
-    "max_path_length": 512
-  },
-  "do_not_crawl": {
-    "topic_ids": {
-      "en.community.sonos.com": [
-        "6935006",
-        "4479975",
-        "5219128",
-        "5487455",
-        "5936784",
-        "6014182"
-      ]
-    },
-    "note": "These EN topics are never fetched for detail/replies and are excluded from the index and exports. The forbidden EN ideas listing route is never requested."
-  },
-  "publish": {
-    "release_prefix": "snapshot",
-    "bundle_asset": "snapshot.tar.gz",
-    "manifest_asset": "manifest.json",
-    "manifest_hash_asset": "manifest.sha256"
-  }
+  "user_agent": "SonosCommunityArchive/2.0 (anonymous public forum archive; +https://github.com/BookCatKid/Sonos-forum-crawl)",
+  "timeout_seconds": 30.0,
+  "refresh_listings_after_seconds": 21600
 }

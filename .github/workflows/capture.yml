@@ -2,24 +2,15 @@ name: capture
 
 on:
   schedule:
-    # Three bounded runs per hour. Each run resumes where the last stopped and
-    # publishes an immutable snapshot release when it made progress.
+    # A few runs per hour. A run restores the newest snapshot, crawls until
+    # its queue drains, and publishes immutable snapshots as it goes, so a
+    # killed runner loses at most a few minutes of work.
     - cron: "11,31,51 * * * *"
   workflow_dispatch:
     inputs:
       host:
         description: "Limit to one host (e.g. en.community.sonos.com); empty = all"
         required: false
-        type: string
-      max_requests:
-        description: "HTTP request budget for this run"
-        required: false
-        default: "240"
-        type: string
-      max_seconds:
-        description: "Time budget in seconds for this run"
-        required: false
-        default: "480"
         type: string
 
 permissions:
@@ -33,7 +24,7 @@ concurrency:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -44,24 +35,20 @@ jobs:
       - name: Offline regression gate
         run: python3 -m unittest -q
 
-      - name: Run bounded capture and publish snapshot
+      - name: Crawl until the queue drains; publish snapshots along the way
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          MAX_REQUESTS="${{ inputs.max_requests || '240' }}"
-          MAX_SECONDS="${{ inputs.max_seconds || '480' }}"
-          HOST="${{ inputs.host || '' }}"
-          ARGS=(--remote github --max-requests "$MAX_REQUESTS" --max-seconds "$MAX_SECONDS")
-          if [ -n "$HOST" ]; then
-            ARGS+=(--host "$HOST")
+          ARGS=(--remote github --archive-dir "$RUNNER_TEMP/sonos-archive"
+                --run-id "$GITHUB_RUN_ID" --checkpoint-seconds 120)
+          if [ -n "${{ inputs.host || '' }}" ]; then
+            ARGS+=(--host "${{ inputs.host }}")
           fi
-          # Exit codes: 0 clean/budget, 3 host denial persisted (not an error),
-          # 4 transient/fail-closed, 5 publish error.
+          # Exit codes: 0 clean, 3 denials seen (still publishes), 4 task errors.
+          code=0
           python3 -m sonos_archive capture "${ARGS[@]}" || code=$?
-          code=${code:-0}
-          if [ "$code" -eq 3 ]; then
-            echo "::notice::A host denied access; stop state persisted. See run output."
-            exit 0
-          fi
-          exit "$code"
+          case "$code" in
+            0|3|4) exit 0 ;;
+            *) exit "$code" ;;
+          esac
