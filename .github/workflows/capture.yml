@@ -2,10 +2,10 @@ name: capture
 
 on:
   schedule:
-    # A few runs per hour. A run restores the newest snapshot, crawls until
-    # its queue drains, and publishes immutable snapshots as it goes, so a
-    # killed runner loses at most a few minutes of work.
-    - cron: "11,31,51 * * * *"
+    # Runs use the full 6-hour job limit, so four runs a day keeps the crawl
+    # effectively continuous. Snapshots publish every --checkpoint-seconds,
+    # so a killed runner loses at most a few minutes of work.
+    - cron: "7 */6 * * *"
   workflow_dispatch:
     inputs:
       host:
@@ -24,7 +24,7 @@ concurrency:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=(--remote github --archive-dir "$RUNNER_TEMP/sonos-archive"
-                --run-id "$GITHUB_RUN_ID" --checkpoint-seconds 120)
+                --run-id "$GITHUB_RUN_ID" --checkpoint-seconds 300)
           if [ -n "${{ inputs.host || '' }}" ]; then
             ARGS+=(--host "${{ inputs.host }}")
           fi
