@@ -212,10 +212,15 @@ def finalize_manifest(stage, manifest, seq):
     return manifest
 
 
+SNAPSHOT_FORMAT = 2
+
+
 def verify_dir(stage):
     """Check a snapshot directory against its manifest. Returns manifest."""
     stage = Path(stage)
     manifest = json.loads((stage / "manifest.json").read_text())
+    if manifest.get("format") != SNAPSHOT_FORMAT or "assets" not in manifest:
+        raise ArchiveError("incompatible snapshot format")
     digest = (stage / "manifest.sha256").read_text().strip()
     if digest != hashlib.sha256(json.dumps(manifest, indent=2, sort_keys=True).encode()).hexdigest():
         raise ArchiveError("manifest.sha256 does not match manifest.json")
@@ -376,6 +381,8 @@ class GithubRemote:
             raw = self._download_asset(rel, "raw.tar.gz", Path(td) / "raw.tar.gz")
             manifest_path = self._download_asset(rel, "manifest.json", Path(td) / "manifest.json")
             manifest = json.loads(Path(manifest_path).read_text())
+            if manifest.get("format") != SNAPSHOT_FORMAT or "assets" not in manifest:
+                raise ArchiveError("incompatible snapshot format")
             if manifest["assets"]["state.tar.gz"]["sha256"] != sha256_file(state):
                 raise ArchiveError("downloaded state.tar.gz hash mismatch")
             if manifest["assets"]["raw.tar.gz"]["sha256"] != sha256_file(raw):
