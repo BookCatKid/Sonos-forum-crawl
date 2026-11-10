@@ -138,11 +138,16 @@ def standard_fixtures():
         ("GET", BASE + "/sitemap-topics-1.xml"): [resp(SITEMAP_TOPICS, ctype="application/xml")],
         ("GET", BASE + "/productUpdates/topics?page=1"): [resp(STANDALONE)],
         ("GET", BASE + "/events/events?page=1"): [resp(EVENTS)],
-        ("POST", BASE + "/contentNavigation/topics"): [
-            resp(LISTING_PAGE1), resp(LISTING_PAGE2),
-            resp({"topics": [], "total": 0}),  # group 229160
-            resp({"topics": [], "total": 0}),  # group 229162
-        ],
+        # Listings share one endpoint; responses must be matched to their
+        # category and page, not the order the task scheduler happens to use.
+        ("POST", BASE + "/contentNavigation/topics", canon(listing_body(101, 1))):
+            [resp(LISTING_PAGE1)],
+        ("POST", BASE + "/contentNavigation/topics", canon(listing_body(101, 2))):
+            [resp(LISTING_PAGE2)],
+        ("POST", BASE + "/contentNavigation/topics", canon(listing_body(229160, 1))):
+            [resp({"topics": [], "total": 0})],
+        ("POST", BASE + "/contentNavigation/topics", canon(listing_body(229162, 1))):
+            [resp({"topics": [], "total": 0})],
         ("POST", BASE + "/topic/5001/replies"): [resp(REPLIES_5001)],
         ("POST", BASE + "/topic/5002/replies"): [resp(REPLIES_5001)],
         ("POST", BASE + "/topic/5003/replies"): [resp(REPLIES_5001)],
@@ -168,7 +173,7 @@ class CrawlTests(unittest.TestCase):
     def test_full_crawl(self):
         crawler, _t = make_crawler(self.store, standard_fixtures())
         crawler.run([HOST])
-        self.assertEqual(self.report_ok(crawler), True)
+        self.assertTrue(self.report_ok(crawler), crawler.report.to_dict())
         counts = self.store.counts()
         # 3 sitemap seeds + 1 listing-only topic; nothing is excluded.
         self.assertEqual(counts["topics"], 4)
@@ -185,6 +190,31 @@ class CrawlTests(unittest.TestCase):
         kid = [r for r in rows if r["reply_id"] == "71"][0]
         self.assertEqual(kid["parent_reply_id"], "70")
         self.assertEqual(kid["depth"], 1)
+
+    def test_listings_can_interleave_across_seconds(self):
+        # Reproduce a page transition landing in a later timestamp second.
+        # The two group listings should not consume the category page-2 reply.
+        set_task = self.store.set_task
+
+        def delay_next_page(host, kind, key, **fields):
+            if kind == "listing" and key == "101" and fields.get("offset") == 2:
+                fields["updated_at"] = "9999-12-31T23:59:59Z"
+            return set_task(host, kind, key, **fields)
+
+        self.store.set_task = delay_next_page
+        crawler, transport = make_crawler(self.store, standard_fixtures())
+        crawler.run([HOST])
+
+        listings = [
+            (json.loads(body)["filters"]["category"][0],
+             json.loads(body)["pagination"]["page"])
+            for method, url, body in transport.sent
+            if url.endswith("/contentNavigation/topics")
+        ]
+        self.assertLess(listings.index((229160, 1)), listings.index((101, 2)))
+        self.assertTrue(self.report_ok(crawler), crawler.report.to_dict())
+        self.assertEqual(self.store.counts()["topics"], 4)
+        self.assertEqual(self.store.counts()["pending_tasks"], 0)
 
     def report_ok(self, crawler):
         return not crawler.report.errors and not crawler.report.denials
@@ -222,7 +252,7 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(task["state"], "denied")
         # Everything else still completed around the denial.
         self.assertEqual(self.store.pending_count(HOST), 0)
-        self.assertEqual(self.store.counts()["topics"], 4)  # sitemap seeds + listing topic
+        self.assertEqual(self.store.counts()["topics"], 3)  # tree denied: sitemap seeds only
         # Next run revives it and hits the host again (fixture queues are now
         # empty -> network errors -> the refreshed tasks are dead-lettered,
         # still no latching stop).
@@ -244,7 +274,7 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(task["state"], "dead")
         self.assertTrue(crawler.report.errors)
         # Other work is unaffected: sitemap seeds still land.
-        self.assertEqual(self.store.counts()["topics"], 4)
+        self.assertEqual(self.store.counts()["topics"], 3)
 
     def test_resume_across_runs(self):
         # A finished run leaves nothing pending; the next run performs only

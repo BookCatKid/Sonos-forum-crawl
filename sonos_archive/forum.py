@@ -116,7 +116,7 @@ class LiveTransport:
 
 
 class FixtureTransport:
-    """Offline replay: {(METHOD, url): [(status, headers, body), ...]} consumed in order."""
+    """Offline replay keyed by (method, URL) or (method, URL, canonical JSON payload)."""
 
     def __init__(self, responses=None):
         self._q = dict(responses or {})
@@ -125,7 +125,16 @@ class FixtureTransport:
     def send(self, method, url, headers, body):
         self.sent.append((method, url, body))
         key = (method.upper(), url)
-        queue = self._q.get(key)
+        queue = None
+        if body is not None:
+            try:
+                payload = json.dumps(json.loads(body), sort_keys=True, ensure_ascii=False)
+            except ValueError:
+                payload = None
+            if payload is not None:
+                queue = self._q.get((*key, payload))
+        if queue is None:
+            queue = self._q.get(key)
         if not queue:
             raise NetworkError(f"no fixture for {method} {url}")
         status, h, b = queue.pop(0)
