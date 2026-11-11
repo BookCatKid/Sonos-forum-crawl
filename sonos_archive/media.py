@@ -235,6 +235,13 @@ def batch(index_path, previous_path, stage, max_assets=1000,
     archive_path = stage / "media.tar.gz"
     start = time.monotonic()
     stored_shas = set()
+    throttled_hosts = {
+        urlsplit(url).hostname or ""
+        for url, record in previous.items()
+        if (record.get("status") == "retryable"
+            and record.get("http_status") in (429, 503)
+            and now - record.get("checked", 0) < TRANSIENT_RETRY_SECONDS)
+    }
 
     def priority(item):
         # The user's goal is a forum mirror: preserve the forum's own
@@ -247,6 +254,10 @@ def batch(index_path, previous_path, stage, max_assets=1000,
 
     with tarfile.open(archive_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
         for url, meta in sorted(discovered.items(), key=priority):
+            if (urlsplit(url).hostname or "") in throttled_hosts:
+                # Do not hammer a CDN after it has explicitly rate limited
+                # this batch. Remaining links stay unprocessed for the next run.
+                continue
             prior = index.get(url)
             if prior and prior.get("status") == "downloaded":
                 continue
@@ -284,6 +295,8 @@ def batch(index_path, previous_path, stage, max_assets=1000,
                 new_downloads += 1
             except (ValueError, HTTPError, URLError, TimeoutError, OSError) as exc:
                 new_failures += 1
+                if isinstance(exc, HTTPError) and exc.code in (429, 503):
+                    throttled_hosts.add(urlsplit(url).hostname or "")
                 # HTTP 429, temporary origin failures and transport errors
                 # must not be treated like permanently missing public files.
                 transient = (
@@ -293,7 +306,9 @@ def batch(index_path, previous_path, stage, max_assets=1000,
                       and not isinstance(exc, HTTPError))
                 index[url] = {
                     "status": "retryable" if transient else "unavailable",
-                    "error": str(exc)[:240], "checked": now, **meta,
+                    "error": str(exc)[:240],
+                    "http_status": (exc.code if isinstance(exc, HTTPError) else None),
+                    "checked": now, **meta,
                 }
     with gzip.open(stage / "media-index.json.gz", "wt", encoding="utf8") as f:
         json.dump(index, f, sort_keys=True, separators=(",", ":"))

@@ -131,14 +131,39 @@ class MediaTests(unittest.TestCase):
         stage = self.root / "limited-by-origin"
         report = media.batch(self.store.root / "index.sqlite", None, stage,
                              max_assets=4, downloader=throttled)
-        self.assertEqual(report["counts"]["retryable"], 4)
+        self.assertEqual(report["counts"]["retryable"], 1)
         self.assertEqual(report["counts"]["unavailable"], 0)
+        self.assertEqual(report["counts"]["unprocessed"], 3)
         immediately = media.batch(
             self.store.root / "index.sqlite",
             stage / "media-index.json.gz", self.root / "retry-after",
             max_assets=4, downloader=throttled)
         self.assertEqual(immediately["counts"]["attempts"], 0)
-        self.assertEqual(immediately["counts"]["retryable"], 4)
+        self.assertEqual(immediately["counts"]["retryable"], 1)
+        self.assertEqual(immediately["counts"]["unprocessed"], 3)
+
+    def test_rate_limited_host_circuits_without_hammering_others(self):
+        urls = {
+            CDN + "first.png": {"origin": "attachment", "host": HOST},
+            CDN + "second.png": {"origin": "attachment", "host": HOST},
+            "https://assets.sonos.com/other.png":
+                {"origin": "embedded", "host": HOST},
+        }
+        attempts = []
+        def download(url, max_bytes):
+            attempts.append(url)
+            if url.startswith(CDN):
+                raise HTTPError(url, 429, "Too Many Requests", {}, None)
+            return b"image contents", "image/png"
+        with patch.object(media, "discover_media", return_value=urls):
+            report = media.batch(
+                self.store.root / "index.sqlite", None, self.root / "throttled",
+                max_assets=3, downloader=download)
+        self.assertEqual(report["counts"]["attempts"], 2)
+        self.assertEqual(report["counts"]["retryable"], 1)
+        self.assertEqual(report["counts"]["downloaded"], 1)
+        self.assertEqual(report["counts"]["unprocessed"], 1)
+        self.assertEqual(len(attempts), 2)
 
     def test_parses_anchor_original_and_thumbnail(self):
         p=media.MediaParser()
