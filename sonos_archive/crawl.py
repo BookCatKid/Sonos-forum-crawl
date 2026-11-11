@@ -534,9 +534,20 @@ class Crawler:
 
         meta = replies.get("metadata") or {}
         has_more = bool(meta.get("hasMore"))
+        offset = payload.get("offset", 0)
+        visible_total = body.get("topicReplyCount")
+        declared_total = meta.get("totalCount")
+        # Some migrated threads have an inflated metadata.totalCount that
+        # includes unavailable historical replies. The API's topicReplyCount
+        # is the count of *visible* replies (including nested children), so
+        # there cannot be more top-level replies than that count. Only use it
+        # as an upper bound when the metadata is demonstrably inconsistent.
+        if (isinstance(visible_total, int) and isinstance(declared_total, int)
+                and 0 <= visible_total < declared_total
+                and offset + len(result) >= visible_total):
+            has_more = False
         if has_more and not result:
             raise ShapeError(f"replies for {pid} claim more pages but returned zero rows")
-        offset = payload.get("offset", 0)
         self.store.set_topic_replies(
             host, pid, replies_state="partial", replies_offset=offset + len(result))
         if has_more:

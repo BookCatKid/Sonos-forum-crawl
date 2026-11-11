@@ -387,6 +387,46 @@ class CrawlTests(unittest.TestCase):
                         and json.loads(body).get("parentId")]
         self.assertEqual([x["parentId"]["id"] for x in nested_calls], [70, 80])
 
+    def test_stale_pagination_total_stops_at_visible_replies(self):
+        # Real forum topic 6730901 has metadata.totalCount=411 but only
+        # topicReplyCount=368 visible replies. A stale hasMore must not cause
+        # a nonexistent page to be requested indefinitely.
+        pid = "6730901"
+        self.store.host_row(HOST)
+        self.store.upsert_topic(HOST, pid, {"content_type": "conversation"},
+                                "", 0, "2026-01-01T00:00:00Z")
+        self.store.add_task(
+            HOST, "replies", pid, BASE + f"/topic/{pid}/replies",
+            canon(replies_body()), priority=50, at="x")
+        def page(ids, offset):
+            return resp({
+                "topicReplyCount": 4,
+                "authors": {},
+                "replies": {
+                    "result": [{"id": str(i), "publicReplyId": str(i + 1000),
+                                "content": "visible"} for i in ids],
+                    "metadata": {"totalCount": 6, "offset": offset,
+                                 "hasMore": True},
+                },
+            })
+        crawler, transport = make_crawler(self.store, {
+            ("GET", BASE + "/"): [resp(HOME, ctype="text/html")],
+            ("POST", BASE + f"/topic/{pid}/replies"): [
+                page([1, 2], 0), page([3, 4], 2)],
+        })
+        for _ in range(2):
+            task = self.store.next_task(HOST)
+            self.assertIsNotNone(task)
+            crawler.execute(HOST, task)
+        self.assertIsNone(self.store.next_task(HOST))
+        topic = self.store.topic(HOST, pid)
+        self.assertEqual(topic["replies_state"], "done")
+        self.assertEqual(topic["replies_seen"], 4)
+        self.assertEqual(topic["replies_missing"], 0)
+        requests = [json.loads(body)["offset"] for method, url, body
+                    in transport.sent if url.endswith(f"/topic/{pid}/replies")]
+        self.assertEqual(requests, [0, 2])
+
     def test_everything_is_crawled(self):
         # No exclusions: sitemap topics including id 6935006 are archived.
         crawler, transport = make_crawler(self.store, standard_fixtures())
