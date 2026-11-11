@@ -73,12 +73,12 @@ REPLIES_5001 = {
         "result": [
             {"id": "70", "publicReplyId": "7000", "content": "<p>answer</p>",
              "authorId": "9", "repliedAt": "2026-01-02T00:00:00+00:00",
-             "inclusiveReplyCount": 2, "inclusiveVisibleReplyCount": 2,
+             "inclusiveReplyCount": 1, "inclusiveVisibleReplyCount": 1,
              "children": {"result": [
                  {"id": "71", "publicReplyId": "7001", "content": "<p>nested</p>",
                   "authorId": "9", "repliedAt": "2026-01-02T01:00:00+00:00",
                   "inclusiveReplyCount": 0, "inclusiveVisibleReplyCount": 0}],
-                 "metadata": {"totalCount": 2, "pageSize": 1, "hasMore": True}}},
+                 "metadata": {"totalCount": 1, "pageSize": 1, "hasMore": False}}},
         ],
         "metadata": {"totalCount": 1, "pageSize": 20, "offset": 0, "hasMore": False},
     },
@@ -220,11 +220,172 @@ class CrawlTests(unittest.TestCase):
         return not crawler.report.errors and not crawler.report.denials
 
     def test_missing_nested_counted(self):
-        # Reply 70 reports 2 direct children; only 1 is returned -> 1 missing.
-        crawler, _t = make_crawler(self.store, standard_fixtures())
+        # The nested endpoint is missing from these fixtures. The gap stays
+        # visible and the failed task is retried on the next run.
+        import copy
+        fixtures = standard_fixtures()
+        root = copy.deepcopy(REPLIES_5001)
+        root["replies"]["result"][0]["children"]["metadata"].update(
+            totalCount=2, hasMore=True)
+        fixtures[("POST", BASE + "/topic/5001/replies")] = [resp(root)]
+        crawler, _t = make_crawler(self.store, fixtures)
         crawler.run([HOST])
         t = self.store.topic(HOST, "5001")
         self.assertEqual(t["replies_missing"], 1)
+        self.assertEqual(t["replies_state"], "partial")
+        self.assertEqual(self.store.db.execute(
+            "SELECT state FROM tasks WHERE kind='nested' "
+            "AND key='5001:70'").fetchone()["state"], "dead")
+
+    def test_nested_replies_fetch_every_child_with_pagination(self):
+        import copy
+        fixtures = standard_fixtures()
+        root = copy.deepcopy(REPLIES_5001)
+        root["replies"]["result"][0]["children"]["metadata"].update(
+            totalCount=3, hasMore=True)
+        children = [
+            {"id": str(rid), "publicReplyId": str(7000 + rid - 70),
+             "authorId": "9", "content": f"<p>{rid}</p>",
+             "repliedAt": "2026-01-02T01:00:00+00:00"}
+            for rid in (71, 72, 73)
+        ]
+        def nested_page(items, offset, more):
+            return resp({
+                "authors": {"9": {"name": "dave"}},
+                "replies": {"result": items, "metadata": {
+                    "totalCount": 3, "offset": offset,
+                    "pageSize": 20, "hasMore": more, "depthLevel": 2}},
+            })
+        fixtures[("POST", BASE + "/topic/5001/replies")] = [
+            resp(root),
+            nested_page(children[:2], 0, True),
+            nested_page(children[2:], 2, False),
+        ]
+        crawler, transport = make_crawler(self.store, fixtures)
+        crawler.run([HOST])
+        self.assertTrue(self.report_ok(crawler), crawler.report.to_dict())
+        topic = self.store.topic(HOST, "5001")
+        self.assertEqual(topic["replies_state"], "done")
+        self.assertEqual(topic["replies_missing"], 0)
+        self.assertEqual(topic["replies_seen"], 4)
+        rows = self.store.db.execute(
+            "SELECT reply_id,parent_reply_id,depth FROM replies "
+            "WHERE topic_public_id='5001' ORDER BY reply_id").fetchall()
+        self.assertEqual([(r["reply_id"], r["parent_reply_id"], r["depth"])
+                          for r in rows],
+                         [("70", None, 0), ("71", "70", 1),
+                          ("72", "70", 1), ("73", "70", 1)])
+        nested = [json.loads(body) for method, url, body in transport.sent
+                  if url == BASE + "/topic/5001/replies"
+                  and json.loads(body).get("parentId")]
+        self.assertEqual([p["offset"] for p in nested], [0, 2])
+        self.assertTrue(all(
+            p["parentId"] == {"id": 70, "contentType": "question"}
+            for p in nested))
+
+    def test_recover_historical_missing_children_without_root_recrawl(self):
+        import copy
+        fixtures = standard_fixtures()
+        root = copy.deepcopy(REPLIES_5001)
+        root["replies"]["result"][0]["children"]["metadata"].update(
+            totalCount=2, hasMore=True)
+        fixtures[("POST", BASE + "/topic/5001/replies")] = [resp(root)]
+        first, _ = make_crawler(self.store, fixtures)
+        first.run([HOST])
+        self.assertEqual(self.store.topic(HOST, "5001")["replies_missing"], 1)
+        # Simulate a previous crawler version which recorded the gap but
+        # never added a child-pagination task to the persistent queue.
+        self.store.db.execute(
+            "DELETE FROM tasks WHERE kind='nested' AND key='5001:70'")
+        self.store.db.commit()
+        self.store.set_topic_replies(HOST, "5001", replies_state="done")
+        second_fixtures = standard_fixtures()
+        second_fixtures[("POST", BASE + "/topic/5001/replies")] = [
+            resp({"authors": {"9": {"name": "dave"}},
+                  "replies": {"result": [
+                      {"id": "71", "authorId": "9", "content": "child"},
+                      {"id": "72", "authorId": "9", "content": "second child"}],
+                      "metadata": {"totalCount": 2, "hasMore": False}}})]
+        second, transport = make_crawler(self.store, second_fixtures)
+        second.run([HOST])
+        self.assertTrue(self.report_ok(second), second.report.to_dict())
+        self.assertEqual(self.store.topic(HOST, "5001")["replies_missing"], 0)
+        self.assertEqual(self.store.topic(HOST, "5001")["replies_state"], "done")
+        calls = [json.loads(body) for method, url, body in transport.sent
+                 if url == BASE + "/topic/5001/replies"]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["parentId"],
+                         {"id": 70, "contentType": "question"})
+
+    def test_reply_id_aliases_preserve_parentage_and_pending_tasks(self):
+        host, pid = HOST, "999"
+        self.store.host_row(host)
+        self.store.add_reply(host, pid, "70", "7000", None,
+                             "a", None, 0, canon({"id": "70"}), 1)
+        self.store.add_reply(host, pid, "71", "7001", "70",
+                             "b", None, 1, canon({"id": "71"}), 1)
+        self.store.add_task(
+            host, "nested", "999:70", BASE + "/topic/999/replies",
+            payload=canon({"offset": 4, "pageSize": 20, "sort": "oldestFirst",
+                           "parentId": {"id": 70, "contentType": "question"}}),
+            offset=4, priority=55, at="x")
+        self.store.set_task(host, "nested", "999:70", state="dead")
+        self.store.add_reply(host, pid, "80", "7000", None,
+                             "a", None, 0, canon({"id": "80"}), 2)
+        self.assertIsNone(self.store.db.execute(
+            "SELECT reply_id FROM replies WHERE reply_id='70'").fetchone())
+        child = self.store.db.execute(
+            "SELECT parent_reply_id FROM replies WHERE reply_id='71'").fetchone()
+        self.assertEqual(child["parent_reply_id"], "80")
+        task = self.store.db.execute(
+            "SELECT payload,state,offset FROM tasks "
+            "WHERE kind='nested' AND key='999:80'").fetchone()
+        self.assertEqual(task["state"], "pending")
+        self.assertEqual(task["offset"], 0)
+        self.assertEqual(json.loads(task["payload"])["parentId"]["id"], 80)
+        self.assertEqual(self.store.db.execute(
+            "SELECT new_reply_id FROM reply_aliases WHERE old_reply_id='70'"
+            ).fetchone()["new_reply_id"], "80")
+
+    def test_404_nested_parent_recovers_after_internal_id_migration(self):
+        import copy
+        fixtures = standard_fixtures()
+        old = copy.deepcopy(REPLIES_5001)
+        parent = old["replies"]["result"][0]
+        parent["children"]["metadata"].update(totalCount=2, hasMore=True)
+        new = copy.deepcopy(old)
+        new_parent = new["replies"]["result"][0]
+        new_parent["id"] = "80"
+        new_parent["children"]["result"][0]["id"] = "81"
+        nested_page = {"authors": {"9": {"name": "dave"}},
+                       "replies": {"result": [
+                           {"id": "81", "publicReplyId": "7001",
+                            "authorId": "9", "content": "old child"},
+                           {"id": "82", "publicReplyId": "7002",
+                            "authorId": "9", "content": "new child"}],
+                           "metadata": {"totalCount": 2, "hasMore": False}}}
+        fixtures[("POST", BASE + "/topic/5001/replies")] = [
+            resp(old), resp("Not found", 404, "text/plain"),
+            resp(new), resp(nested_page)]
+        crawler, transport = make_crawler(self.store, fixtures)
+        crawler.run([HOST])
+        self.assertTrue(self.report_ok(crawler), crawler.report.to_dict())
+        topic = self.store.topic(HOST, "5001")
+        self.assertEqual(topic["replies_state"], "done")
+        self.assertEqual(topic["replies_missing"], 0)
+        self.assertEqual(topic["replies_seen"], 3)
+        ids = {r["reply_id"] for r in self.store.db.execute(
+            "SELECT reply_id FROM replies WHERE topic_public_id='5001'")}
+        self.assertEqual(ids, {"80", "81", "82"})
+        parents = self.store.db.execute(
+            "SELECT reply_id,parent_reply_id FROM replies "
+            "WHERE topic_public_id='5001' ORDER BY reply_id").fetchall()
+        self.assertEqual([(r["reply_id"], r["parent_reply_id"]) for r in parents],
+                         [("80", None), ("81", "80"), ("82", "80")])
+        nested_calls = [json.loads(body) for method, url, body in transport.sent
+                        if url == BASE + "/topic/5001/replies"
+                        and json.loads(body).get("parentId")]
+        self.assertEqual([x["parentId"]["id"] for x in nested_calls], [70, 80])
 
     def test_everything_is_crawled(self):
         # No exclusions: sitemap topics including id 6935006 are archived.

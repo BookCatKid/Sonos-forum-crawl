@@ -123,11 +123,15 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
 
 ## Known limits (honest)
 
-- **Nested replies are partially truncated by the platform.** The replies
-  endpoint returns at most 1 child per level (`pageSize: 1`, `hasMore`), and
-  no anonymous parameter combination unlocks further siblings. Each reply's
-  `inclusiveVisibleReplyCount` is compared against what was captured and the
-  shortfall is counted as `missing_nested_replies`, never silently dropped.
+- **Nested replies require explicit pagination.** The initial topic response
+  embeds just one child per parent. The public forum frontend fetches the
+  remaining children via the same replies endpoint with
+  `parentId: {"id": <internal reply id>, "contentType": <topic type>}`.
+  The crawler now follows each parent independently, preserves pagination
+  offsets in the durable task queue, and reconciles direct-child counts.
+  When the backend reassigns internal reply IDs, it resolves them through
+  stable `publicReplyId` values and preserves alias provenance. Any
+  unresolved children remain visible in `missing_nested_replies`.
 - A topic whose replies endpoint 404s is marked `replies_state = "gone"`.
 - Denied and dead-lettered tasks are retried next run without resetting
   pagination cursors. A persistent denial remains visible in coverage.

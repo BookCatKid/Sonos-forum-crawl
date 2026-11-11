@@ -71,6 +71,7 @@ class Crawler:
         self.report = Report(self.run_id)
         self.after_task = after_task or (lambda: None)
         self._deny_attempts = {}
+        self._stale_reply_ids_refreshed = set()
 
     # ---- request plumbing ------------------------------------------------
     def _capture(self, host, method, url, request, status, body, kind):
@@ -134,12 +135,134 @@ class Crawler:
                                    base + "/sitemap.xml", at=now_iso())
             self.store.set_meta(f"sitemap_{host}", str(int(time.time())))
 
+    # ---- threaded reply recovery ----------------------------------------
+    def _queue_nested(self, host, topic_id, node, content_type):
+        """Queue an independent, resumable pagination cursor per parent reply.
+
+        Verified against the forum's compiled frontend: it requests the same
+        /topic/{publicId}/replies endpoint with a parentId object containing
+        the *internal* reply id and the topic's contentType.
+        """
+        children = node.get("children") or {}
+        if not isinstance(children, dict):
+            return
+        meta = children.get("metadata") or {}
+        total = meta.get("totalCount")
+        if not isinstance(total, int) or total <= 0:
+            return
+        parent_id = node.get("id")
+        if parent_id is None:
+            return
+        existing = self.store.db.execute(
+            "SELECT COUNT(*) FROM replies WHERE host=? AND topic_public_id=? "
+            "AND parent_reply_id=?",
+            (host, str(topic_id), str(parent_id))).fetchone()[0]
+        if existing >= total:
+            return
+        if not content_type:
+            msg = f"{host}: nested replies for topic {topic_id} lack contentType"
+            if msg not in self.report.errors:
+                self.report.errors.append(msg)
+            return
+        key = f"{topic_id}:{parent_id}"
+        payload = {
+            "offset": 0, "pageSize": REPLIES_PAGE_SIZE, "sort": "oldestFirst",
+            "parentId": {"id": int(parent_id), "contentType": content_type},
+        }
+        url = f"https://{host}/topic/{topic_id}/replies"
+        task = self.store.db.execute(
+            "SELECT state FROM tasks WHERE host=? AND kind='nested' AND key=?",
+            (host, key)).fetchone()
+        if task is not None and task["state"] == "done":
+            self.store.revive_task(host, "nested", key, url,
+                                   canon(payload), offset=0, at=now_iso())
+        elif task is None:
+            self.task(host, "nested", key, url, payload)
+
+    def seed_nested_from_index(self, host):
+        """Upgrade previously archived partial threads without recrawling them."""
+        topics = self.store.db.execute(
+            "SELECT public_id,content_type FROM topics "
+            "WHERE host=? AND replies_missing>0", (host,)).fetchall()
+        for topic in topics:
+            pid = topic["public_id"]
+            rows = self.store.db.execute(
+                "SELECT raw_json FROM replies WHERE host=? AND topic_public_id=?",
+                (host, pid)).fetchall()
+            for row in rows:
+                if row["raw_json"]:
+                    self._queue_nested(host, pid, json.loads(row["raw_json"]),
+                                       topic["content_type"])
+            self._reconcile_replies(host, pid)
+
+    def _save_reply_tree(self, host, topic_id, nodes, authors, seq,
+                         content_type, parent_id=None, depth=0):
+        """Store all embedded descendants and schedule incomplete child lists."""
+        for node in nodes:
+            rid = node.get("id")
+            if rid is None:
+                continue
+            author = authors.get(str(node.get("authorId"))) or {}
+            self.store.add_reply(
+                host, topic_id, rid, node.get("publicReplyId"), parent_id,
+                author.get("name") or str(node.get("authorId") or ""),
+                node.get("repliedAt"), depth, canon(node), seq)
+            children = node.get("children") or {}
+            kids = children.get("result") if isinstance(children, dict) else children
+            if kids:
+                self._save_reply_tree(host, topic_id, kids, authors, seq,
+                                      content_type, str(rid), depth + 1)
+            self._queue_nested(host, topic_id, node, content_type)
+
+    def _reconcile_replies(self, host, topic_id):
+        """Count distinct archived replies and uncollected direct children.
+
+        Historical inclusiveVisibleReplyCount is transitive and must not be
+        summed over every ancestor (that double counts missing descendants).
+        """
+        rows = self.store.db.execute(
+            "SELECT reply_id,parent_reply_id,raw_json FROM replies "
+            "WHERE host=? AND topic_public_id=?", (host, str(topic_id))).fetchall()
+        direct = {}
+        for row in rows:
+            parent = row["parent_reply_id"]
+            direct[parent] = direct.get(parent, 0) + 1
+        missing = 0
+        for row in rows:
+            node = json.loads(row["raw_json"]) if row["raw_json"] else {}
+            children = node.get("children") or {}
+            meta = children.get("metadata") if isinstance(children, dict) else {}
+            total = (meta or {}).get("totalCount")
+            if isinstance(total, int):
+                missing += max(0, total - direct.get(row["reply_id"], 0))
+        self.store.set_topic_replies(
+            host, topic_id, replies_seen=len(rows), replies_missing=missing)
+        return missing
+
+    def _finalize_reply_task(self, host, kind, key):
+        pid = key if kind == "replies" else key.split(":", 1)[0]
+        topic = self.store.topic(host, pid)
+        if not topic or topic["replies_state"] == "gone":
+            return
+        missing = self._reconcile_replies(host, pid)
+        unfinished = self.store.db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE host=? AND state!='done' "
+            "AND ((kind='replies' AND key=?) OR "
+            "(kind='nested' AND key LIKE ?))",
+            (host, pid, pid + ":%")).fetchone()[0]
+        if unfinished or missing:
+            self.store.set_topic_replies(host, pid, replies_state="partial")
+        else:
+            self.store.set_topic_replies(
+                host, pid, replies_state="done", replies_fetched_at=now_iso())
+
     # ---- main loop -------------------------------------------------------
     DENY_CAP = 3  # per-task denial attempts within one run
 
     def run(self, hosts):
         for host in hosts:
             self.seed(host)
+            self.seed_nested_from_index(host)
             self.store.revive_failed(host)
         while True:
             progressed = False
@@ -177,6 +300,13 @@ class Crawler:
                     self.store.set_task(host, row["kind"], row["key"], state="dead")
                     self.report.errors.append(f"{host}: HTTP {e.status} {e.url}")
             if not progressed:
+                for host in hosts:
+                    dead = self.store.db.execute(
+                        "SELECT COUNT(*) FROM tasks WHERE host=? AND state='dead'",
+                        (host,)).fetchone()[0]
+                    if dead:
+                        self.report.errors.append(
+                            f"{host}: {dead} unresolved dead crawl tasks")
                 return
 
     def execute(self, host, row):
@@ -185,6 +315,8 @@ class Crawler:
         if not keep_pending:
             self.store.set_task(host, kind, row["key"], state="done",
                                 updated_at=now_iso())
+        if kind in ("replies", "nested"):
+            self._finalize_reply_task(host, kind, row["key"])
         self.report.tasks_done += 1
         self.after_task()
 
@@ -382,70 +514,87 @@ class Crawler:
         pid = row["key"]
         payload = self.task_payload(row)
         try:
-            r = self.session(host).post(f"/topic/{pid}/replies", payload, kind="replies")
-        except HttpError as e:
-            if e.status == 404:
+            response = self.session(host).post(
+                f"/topic/{pid}/replies", payload, kind="replies")
+        except HttpError as exc:
+            if exc.status == 404:
                 self.store.set_topic_replies(host, pid, replies_state="gone")
                 return
             raise
-        body = r.json()
+        body = response.json()
         replies = body.get("replies")
         result = replies.get("result") if isinstance(replies, dict) else None
         if not isinstance(result, list):
             raise ShapeError("replies response missing result list")
         authors = body.get("authors") or {}
-        seq = self.store.last_capture_seq()
-
-        seen = 0
-        missing = 0
-
-        def seen_below(node):
-            children = node.get("children") or {}
-            kids = children.get("result") if isinstance(children, dict) else children
-            return sum(1 + seen_below(k) for k in kids or [])
-
-        def visit(node, parent_id, depth):
-            nonlocal seen, missing
-            rid = node.get("id")
-            if rid is None:
-                return
-            seen += 1
-            author = authors.get(str(node.get("authorId"))) or {}
-            self.store.add_reply(
-                host, pid, rid, node.get("publicReplyId"), parent_id,
-                author.get("name") or str(node.get("authorId") or ""),
-                node.get("repliedAt"), depth, canon(node), seq)
-            children = node.get("children") or {}
-            kids = children.get("result") if isinstance(children, dict) else children
-            for kid in kids or []:
-                visit(kid, str(rid), depth + 1)
-            # The API paginates nested children at pageSize 1 per level and no
-            # anonymous way to fetch further siblings has been found. Count
-            # the gap honestly instead of pretending completeness.
-            expected = node.get("inclusiveVisibleReplyCount") or 0
-            missing += max(0, expected - seen_below(node))
-
-        for node in result:
-            visit(node, None, 0)
+        topic = self.store.topic(host, pid)
+        content_type = topic["content_type"] if topic else None
+        self._save_reply_tree(host, pid, result, authors,
+                              self.store.last_capture_seq(), content_type)
 
         meta = replies.get("metadata") or {}
         has_more = bool(meta.get("hasMore"))
         if has_more and not result:
             raise ShapeError(f"replies for {pid} claim more pages but returned zero rows")
         offset = payload.get("offset", 0)
-        topic = self.store.topic(host, pid)
-        fields = {
-            "replies_state": "partial" if has_more else "done",
-            "replies_offset": offset + len(result),
-            "replies_seen": (topic["replies_seen"] if topic else 0) + seen,
-            "replies_missing": (topic["replies_missing"] if topic else 0) + missing,
-        }
-        if not has_more:
-            fields["replies_fetched_at"] = now_iso()
-        self.store.set_topic_replies(host, pid, **fields)
+        self.store.set_topic_replies(
+            host, pid, replies_state="partial", replies_offset=offset + len(result))
         if has_more:
-            # Same task, next offset: stays pending and is popped again later.
-            self.store.set_task(host, "replies", pid,
-                                payload=canon(dict(payload, offset=offset + len(result))),
-                                offset=offset + len(result), updated_at=now_iso())
+            self.store.set_task(
+                host, "replies", pid,
+                payload=canon(dict(payload, offset=offset + len(result))),
+                offset=offset + len(result), updated_at=now_iso())
+            return False
+
+    def do_nested(self, host, row):
+        """Fetch children exactly as the forum's ThreadedReplies frontend does."""
+        pid, sep, parent = row["key"].partition(":")
+        if not sep:
+            raise ShapeError(f"invalid nested task key {row['key']}")
+        payload = self.task_payload(row)
+        parent_row = self.store.db.execute(
+            "SELECT depth FROM replies WHERE host=? AND topic_public_id=? "
+            "AND reply_id=?", (host, pid, parent)).fetchone()
+        if parent_row is None:
+            raise ShapeError(f"nested parent {parent} missing for topic {pid}")
+        try:
+            response = self.session(host).post(
+                f"/topic/{pid}/replies", payload, kind="nested")
+        except HttpError as exc:
+            if exc.status != 404 or pid in self._stale_reply_ids_refreshed:
+                raise
+            # Public reply IDs survive a backend migration, but private
+            # parent IDs can change. Refresh the root once and let
+            # Store.add_reply migrate aliases, children and pending cursors.
+            self._stale_reply_ids_refreshed.add(pid)
+            self.store.revive_task(
+                host, "replies", pid,
+                f"https://{host}/topic/{pid}/replies",
+                canon({"offset": 0, "pageSize": REPLIES_PAGE_SIZE,
+                       "sort": "oldestFirst"}), offset=0, at=now_iso())
+            self.store.set_task(
+                host, "nested", row["key"], state="dead", updated_at=now_iso())
+            self.log(f"[{host}] stale nested parent {parent} for {pid}; "
+                     "refreshing root replies to resolve current internal ID")
+            return False
+        body = response.json()
+        replies = body.get("replies")
+        result = replies.get("result") if isinstance(replies, dict) else None
+        if not isinstance(result, list):
+            raise ShapeError("nested replies response missing result list")
+        meta = replies.get("metadata") or {}
+        if meta.get("hasMore") and not result:
+            raise ShapeError(f"nested replies for {pid}/{parent} returned empty page")
+        topic = self.store.topic(host, pid)
+        content_type = topic["content_type"] if topic else None
+        self._save_reply_tree(
+            host, pid, result, body.get("authors") or {},
+            self.store.last_capture_seq(), content_type,
+            parent_id=parent, depth=parent_row["depth"] + 1)
+        if meta.get("hasMore"):
+            offset = payload.get("offset", 0) + len(result)
+            self.store.set_task(
+                host, "nested", row["key"],
+                payload=canon(dict(payload, offset=offset)),
+                offset=offset, updated_at=now_iso())
             return False

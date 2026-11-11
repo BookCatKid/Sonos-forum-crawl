@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 SCHEMA_VERSION = 2
 
 PRIORITY = {"tree": 10, "groups": 15, "sitemap": 20, "sitemap_file": 25,
-            "standalone": 30, "listing": 40, "replies": 50}
+            "standalone": 30, "listing": 40, "replies": 50, "nested": 55}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -104,6 +104,18 @@ CREATE TABLE IF NOT EXISTS replies (
     raw_json TEXT,
     capture_seq INTEGER,
     PRIMARY KEY (host, topic_public_id, reply_id)
+);
+
+-- Public reply IDs remain stable even when the platform remaps its
+-- private/internal reply IDs. Retain the former indexed projection here.
+CREATE TABLE IF NOT EXISTS reply_aliases (
+    host TEXT NOT NULL,
+    topic_public_id TEXT NOT NULL,
+    old_reply_id TEXT NOT NULL,
+    new_reply_id TEXT NOT NULL,
+    public_reply_id TEXT,
+    old_raw_json TEXT,
+    PRIMARY KEY (host, topic_public_id, old_reply_id)
 );
 
 CREATE TABLE IF NOT EXISTS denials (
@@ -371,11 +383,56 @@ class Store:
     # ---- replies --------------------------------------------------------
     def add_reply(self, host, topic_id, reply_id, public_reply_id, parent_id,
                   author, replied_at, depth, raw_json, capture_seq):
-        self.db.execute(
-            "INSERT OR REPLACE INTO replies VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (host, str(topic_id), str(reply_id), public_reply_id, parent_id,
-             author, replied_at, depth, raw_json, capture_seq))
-        self.db.commit()
+        topic_id, reply_id = str(topic_id), str(reply_id)
+        parent_id = str(parent_id) if parent_id is not None else None
+        # Gainsight can reassign internal IDs without changing publicReplyId.
+        # Merge by the stable public ID so older replies do not become bogus
+        # extra replies or leave dead nested-pagination tasks behind.
+        with self.db:
+            if public_reply_id is not None:
+                old = self.db.execute(
+                    "SELECT reply_id,raw_json FROM replies WHERE host=? "
+                    "AND topic_public_id=? AND public_reply_id=? AND reply_id!=?",
+                    (host, topic_id, str(public_reply_id), reply_id)).fetchall()
+                for old_row in old:
+                    old_id = old_row["reply_id"]
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO reply_aliases VALUES(?,?,?,?,?,?)",
+                        (host, topic_id, old_id, reply_id, str(public_reply_id),
+                         old_row["raw_json"]))
+                    self.db.execute(
+                        "UPDATE replies SET parent_reply_id=? WHERE host=? "
+                        "AND topic_public_id=? AND parent_reply_id=?",
+                        (reply_id, host, topic_id, old_id))
+                    old_key = f"{topic_id}:{old_id}"
+                    new_key = f"{topic_id}:{reply_id}"
+                    nested = self.db.execute(
+                        "SELECT payload FROM tasks WHERE host=? AND kind='nested' "
+                        "AND key=?", (host, old_key)).fetchone()
+                    if nested is not None:
+                        successor = self.db.execute(
+                            "SELECT 1 FROM tasks WHERE host=? AND kind='nested' "
+                            "AND key=?", (host, new_key)).fetchone()
+                        if successor is not None:
+                            self.db.execute(
+                                "DELETE FROM tasks WHERE host=? AND kind='nested' "
+                                "AND key=?", (host, old_key))
+                        else:
+                            payload = json.loads(nested["payload"])
+                            payload["parentId"]["id"] = int(reply_id)
+                            self.db.execute(
+                                "UPDATE tasks SET key=?,payload=?,offset=0,"
+                                "state='pending' WHERE host=? AND kind='nested' "
+                                "AND key=?",
+                                (new_key, canon(payload), host, old_key))
+                    self.db.execute(
+                        "DELETE FROM replies WHERE host=? AND topic_public_id=? "
+                        "AND reply_id=?", (host, topic_id, old_id))
+            self.db.execute(
+                "INSERT OR REPLACE INTO replies VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (host, topic_id, reply_id,
+                 str(public_reply_id) if public_reply_id is not None else None,
+                 parent_id, author, replied_at, depth, raw_json, capture_seq))
 
     def add_denial(self, host, url, status, reason, snippet, at):
         self.db.execute("INSERT INTO denials VALUES(NULL,?,?,?,?,?,?)",
