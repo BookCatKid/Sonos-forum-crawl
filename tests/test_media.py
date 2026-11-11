@@ -87,6 +87,25 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(m2["counts"]["attempts"],0)
         self.assertEqual(m2["counts"]["unavailable"],4)
 
+    def test_first_party_uploads_come_before_external_links(self):
+        other = "https://assets.sonos.com/a.jpg"
+        first_party = CDN + "original.png"
+        refs = {
+            other: {"origin": "embedded", "host": HOST},
+            first_party: {"origin": "attachment", "host": HOST},
+        }
+        downloaded = []
+        def downloader(url, max_bytes):
+            downloaded.append(url)
+            return b"public binary", "image/png"
+        with patch.object(media, "discover_media", return_value=refs):
+            report = media.batch(
+                self.store.root / "index.sqlite", None,
+                self.root / "priority", max_assets=1,
+                downloader=downloader)
+        self.assertEqual(downloaded, [first_party])
+        self.assertEqual(report["counts"]["unprocessed"], 1)
+
     def test_unsupported_inventory_not_truncated_by_budget(self):
         discovered = {
             CDN + "first.jpg": {"origin": "embedded", "host": HOST},

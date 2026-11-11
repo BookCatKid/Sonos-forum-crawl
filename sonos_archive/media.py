@@ -234,8 +234,18 @@ def batch(index_path, previous_path, stage, max_assets=1000,
     archive_path = stage / "media.tar.gz"
     start = time.monotonic()
     stored_shas = set()
+
+    def priority(item):
+        # The user's goal is a forum mirror: preserve the forum's own
+        # attachments and embedded uploads before optional external links.
+        url, meta = item
+        host = urlsplit(url).hostname or ""
+        first_party = ("insided.com" in host or "almostinsided.com" in host)
+        return (0 if meta.get("origin") == "attachment" or first_party else 1,
+                url)
+
     with tarfile.open(archive_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
-        for url, meta in sorted(discovered.items()):
+        for url, meta in sorted(discovered.items(), key=priority):
             prior = index.get(url)
             if prior and prior.get("status") == "downloaded":
                 continue

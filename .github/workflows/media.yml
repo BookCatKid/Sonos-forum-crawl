@@ -2,7 +2,8 @@ name: media
 
 on:
   schedule:
-    - cron: "37 */6 * * *"
+    # A separate bounded media batch every two hours.
+    - cron: "37 */2 * * *"
   workflow_dispatch:
     inputs:
       max_assets:
