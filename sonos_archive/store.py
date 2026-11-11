@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 SCHEMA_VERSION = 2
 
 PRIORITY = {"tree": 10, "groups": 15, "sitemap": 20, "sitemap_file": 25,
-            "standalone": 30, "listing": 40, "replies": 50, "nested": 55}
+            "standalone": 30, "listing": 40, "topic": 45, "replies": 50, "nested": 55}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS topics (
     reply_count INTEGER,
     raw_json TEXT,
     capture_seq INTEGER,
+    topic_body_state TEXT NOT NULL DEFAULT 'pending',
     replies_state TEXT NOT NULL DEFAULT 'pending',
     replies_offset INTEGER NOT NULL DEFAULT 0,
     replies_seen INTEGER NOT NULL DEFAULT 0,
@@ -171,6 +172,18 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(SCHEMA)
+        # Additive migration for existing v2 archives: the previous crawler
+        # stored sitemap-only stubs without ever fetching their opening post.
+        columns = {r[1] for r in self.db.execute("PRAGMA table_info(topics)")}
+        if "topic_body_state" not in columns:
+            with self.db:
+                self.db.execute(
+                    "ALTER TABLE topics ADD COLUMN topic_body_state TEXT "
+                    "NOT NULL DEFAULT 'pending'")
+        with self.db:
+            self.db.execute(
+                "UPDATE topics SET topic_body_state='done' "
+                "WHERE raw_json IS NOT NULL AND topic_body_state='pending'")
         self.set_meta("schema_version", SCHEMA_VERSION)
 
     def close(self):
@@ -322,6 +335,8 @@ class Store:
             (host, public_id)).fetchone()
         cols = {k: v for k, v in fields.items() if v is not None}
         cols.update(raw_json=raw_json, capture_seq=capture_seq, last_seen_at=at)
+        if raw_json is not None:
+            cols["topic_body_state"] = "done"
         if row is None:
             cols.update(host=host, public_id=public_id, first_seen_at=at)
             names = ",".join(cols)
@@ -357,6 +372,21 @@ class Store:
                 "INSERT INTO topics(host,public_id,url,first_seen_at,last_seen_at) "
                 "VALUES(?,?,?,?,?) ON CONFLICT(host,public_id) DO NOTHING", rows)
         return [(pid, url) for _h, pid, url, _a, _b in rows]
+
+    def queue_topic_pages_bulk(self, host, public_ids, at):
+        """Enqueue opening-post GETs for sitemap-only topic stubs."""
+        wanted = set(map(str, public_ids))
+        rows = self.db.execute(
+            "SELECT public_id,url FROM topics WHERE host=? "
+            "AND raw_json IS NULL AND topic_body_state='pending'",
+            (host,)).fetchall()
+        work = [(host, "topic", row["public_id"], row["url"], "", at)
+                for row in rows if row["public_id"] in wanted and row["url"]]
+        with self.db:
+            self.db.executemany(
+                "INSERT OR IGNORE INTO tasks(host,kind,key,url,payload,"
+                "priority,updated_at) VALUES(?,?,?,?,?,45,?)", work)
+        return len(work)
 
     def queue_replies_bulk(self, host, public_ids, at):
         """Enqueue one replies task per topic id; existing tasks (done, dead

@@ -13,6 +13,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urljoin, urlsplit
 
 from .errors import Denied, HttpError, NetworkError, ShapeError
 
@@ -155,7 +156,7 @@ class Session:
         self.capture = capture
         self._csrf = None
 
-    def _send(self, method, path, payload, kind, accept):
+    def _send(self, method, path, payload, kind, accept, allow_redirect=False):
         url = self.base + path
         headers = {"User-Agent": self.user_agent, "Accept": accept}
         data = None
@@ -173,6 +174,8 @@ class Session:
         reason = r.denial_reason()
         if reason:
             raise Denied(reason, url=url, status=r.status, snippet=r.snippet())
+        if allow_redirect and r.status in (301, 302, 303, 307, 308):
+            return r
         if r.status == 404:
             raise HttpError(404, url)
         if r.status != 200:
@@ -181,6 +184,27 @@ class Session:
 
     def get(self, path, kind="get", accept="text/html"):
         return self._send("GET", path, None, kind, accept)
+
+    def get_following_redirects(self, path, kind="get", accept="text/html",
+                                max_redirects=5):
+        """Follow only verified same-host HTTPS redirects; capture every hop."""
+        seen = set()
+        for _ in range(max_redirects + 1):
+            if path in seen:
+                raise ShapeError(f"cyclic redirect for {path}")
+            seen.add(path)
+            r = self._send("GET", path, None, kind, accept, allow_redirect=True)
+            if r.status == 200:
+                return r
+            location = r.header("location")
+            if not location:
+                raise ShapeError(f"HTTP {r.status} redirect missing Location")
+            url = urlsplit(urljoin(self.base + path, location))
+            if (url.scheme != "https" or url.netloc != self.host
+                    or not url.path.startswith("/")):
+                raise ShapeError(f"refusing out-of-scope redirect from {path}")
+            path = url.path + (("?" + url.query) if url.query else "")
+        raise ShapeError(f"too many redirects for {path}")
 
     def post(self, path, payload, kind="post"):
         if self._csrf is None:

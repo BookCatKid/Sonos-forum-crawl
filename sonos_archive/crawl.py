@@ -19,6 +19,7 @@ one stopped.
 import json
 import re
 import time
+from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
 from .errors import Denied, HttpError, NetworkError, ShapeError
@@ -36,6 +37,32 @@ def iso_after(seconds):
 
 
 # A trailing -<digits> in a forum URL is the topic public id (Store.seed_topics).
+
+
+class TopicPageParser(HTMLParser):
+    """Extract the server-rendered topic object used by Sonos's actual UI.
+
+    This follows the site's Content/TopicView/V2 component data-preact and
+    data-props contract, rather than guessing from meta-description snippets.
+    HTMLParser decodes the HTML-escaped JSON attribute correctly.
+    """
+    def __init__(self):
+        super().__init__()
+        self.topic = None
+
+    def handle_starttag(self, tag, attrs):
+        if self.topic is not None:
+            return
+        props = dict(attrs)
+        if "Content/TopicView/V2/" not in props.get("data-preact", ""):
+            return
+        if not props.get("data-props"):
+            return
+        try:
+            data = json.loads(props["data-props"])
+        except (ValueError, TypeError) as exc:
+            raise ShapeError("malformed TopicView data-props") from exc
+        self.topic = data.get("topic")
 
 
 class Report:
@@ -179,6 +206,13 @@ class Crawler:
         elif task is None:
             self.task(host, "nested", key, url, payload)
 
+    def seed_missing_topic_bodies(self, host):
+        """Restore incomplete sitemap stubs without re-fetching known bodies."""
+        public_ids = [r[0] for r in self.store.db.execute(
+            "SELECT public_id FROM topics WHERE host=? "
+            "AND raw_json IS NULL AND topic_body_state='pending'", (host,))]
+        self.store.queue_topic_pages_bulk(host, public_ids, now_iso())
+
     def seed_nested_from_index(self, host):
         """Upgrade previously archived partial threads without recrawling them."""
         topics = self.store.db.execute(
@@ -262,6 +296,7 @@ class Crawler:
     def run(self, hosts):
         for host in hosts:
             self.seed(host)
+            self.seed_missing_topic_bodies(host)
             self.seed_nested_from_index(host)
             self.store.revive_failed(host)
         while True:
@@ -405,7 +440,46 @@ class Crawler:
                                    accept="application/xml,text/xml,*/*")
         locs = re.findall(r"<loc>([^<]+)</loc>", r.text())
         seeds = self.store.seed_topics(host, locs, now_iso())
+        self.store.queue_topic_pages_bulk(host, [pid for pid, _u in seeds], now_iso())
         self.store.queue_replies_bulk(host, [pid for pid, _u in seeds], now_iso())
+
+    def do_topic(self, host, row):
+        """Fetch opening-post content absent from sitemap-only topic stubs."""
+        pid = row["key"]
+        old = self.store.topic(host, pid)
+        if old and old["raw_json"] is not None:
+            return
+        path = urlsplit(row["url"])
+        if path.scheme != "https" or path.hostname != host:
+            raise ShapeError(f"topic URL leaves intended forum: {row['url']}")
+        try:
+            response = self.session(host).get_following_redirects(
+                path.path + ("?" + path.query if path.query else ""),
+                kind="topic", accept="text/html")
+        except HttpError as exc:
+            if exc.status == 404:
+                self.store.set_topic_replies(
+                    host, pid, topic_body_state="gone")
+                return
+            raise
+        parser = TopicPageParser()
+        parser.feed(response.text())
+        topic = parser.topic
+        if (not isinstance(topic, dict) or str(topic.get("publicId")) != pid
+                or not isinstance(topic.get("title"), str)
+                or not isinstance(topic.get("content"), str)):
+            raise ShapeError(f"topic {pid} has no matching first-post data")
+        self.store.upsert_topic(host, pid, {
+            "internal_id": str(topic["id"]) if topic.get("id") is not None else None,
+            "title": topic["title"],
+            "content_type": topic.get("contentType"),
+            "category_id": (str(topic["categoryId"])
+                            if topic.get("categoryId") is not None else None),
+            "published_at": topic.get("publishedAt"),
+            "author": str(topic.get("authorId") or "") or None,
+            "reply_count": topic.get("replyCount"),
+            "url": topic.get("fullTopicUrl") or row["url"],
+        }, canon(topic), self.store.last_capture_seq(), now_iso())
 
     def do_standalone(self, host, row):
         parts = urlsplit(row["url"])

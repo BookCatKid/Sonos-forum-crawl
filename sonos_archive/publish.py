@@ -76,6 +76,7 @@ def write_exports(store, out):
                 "last_activity_at": t["last_activity_at"],
                 "reply_count": t["reply_count"],
                 "replies_state": t["replies_state"],
+                "topic_body_state": t["topic_body_state"],
                 "replies_seen": t["replies_seen"],
                 "replies_missing_nested": t["replies_missing"],
                 "content_html": (json.loads(t["raw_json"]).get("content")
@@ -124,7 +125,14 @@ def coverage(store, hosts):
         dead_tasks = store.db.execute(
             "SELECT COUNT(*) c FROM tasks WHERE host=? AND state='dead'",
             (host,)).fetchone()["c"]
+        missing_bodies = store.db.execute(
+            "SELECT COUNT(*) FROM topics WHERE host=? AND raw_json IS NULL "
+            "AND topic_body_state='pending'", (host,)).fetchone()[0]
+        unavailable_bodies = store.db.execute(
+            "SELECT COUNT(*) FROM topics WHERE host=? AND raw_json IS NULL "
+            "AND topic_body_state='gone'", (host,)).fetchone()[0]
         host_complete = (bool(leaf) and len(done) == len(leaf)
+                         and not missing_bodies
                          and not pending and not denied_tasks and not dead_tasks
                          and not tc["pending"] and not tc["missing"])
         if not host_complete:
@@ -141,6 +149,8 @@ def coverage(store, hosts):
             "topics_replies_pending": tc["pending"],
             "topics_replies_gone": tc["gone"],
             "missing_nested_replies": tc["missing"],
+            "missing_topic_bodies": missing_bodies,
+            "unavailable_topic_bodies": unavailable_bodies,
             "pending_tasks": pending,
             "denied_tasks": denied_tasks,
             "dead_tasks": dead_tasks,
@@ -148,8 +158,10 @@ def coverage(store, hosts):
         })
     report["is_complete_mirror"] = complete
     report["note"] = ("'complete' requires discovered leaf categories all listed, "
-                      "zero pending/denied/dead tasks and zero known-missing "
-                      "nested replies. It cannot prove undiscovered content is absent.")
+                      "zero pending/denied/dead tasks, zero known-missing "
+                      "nested replies, and zero unresolved opening posts. "
+                      "Unavailable (HTTP 404) topics are reported separately. "
+                      "It cannot prove undiscovered content is absent.")
     return report
 
 

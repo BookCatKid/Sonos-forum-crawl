@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import html
 import sys
 import tempfile
 import unittest
@@ -136,6 +137,15 @@ def standard_fixtures():
             '<a href="/groups/france-229162">France</a></html>', ctype="text/html")],
         ("GET", BASE + "/sitemap.xml"): [resp(SITEMAP_INDEX, ctype="application/xml")],
         ("GET", BASE + "/sitemap-topics-1.xml"): [resp(SITEMAP_TOPICS, ctype="application/xml")],
+        ("GET", BASE + "/ask-101/excluded-topic-6935006"): [
+            resp('<div data-preact="destination/modules/Content/TopicView/V2/index.sync" '
+                 'data-props="' + html.escape(json.dumps({"topic": {
+                     "id": "700", "publicId": "6935006",
+                     "title": "Sitemap only", "contentType": "question",
+                     "content": "<p>Full original post</p>", "replyCount": 2,
+                     "authorId": "9", "categoryId": "101"}}), quote=True)
+                 + '"></div>', ctype="text/html")],
+
         ("GET", BASE + "/productUpdates/topics?page=1"): [resp(STANDALONE)],
         ("GET", BASE + "/events/events?page=1"): [resp(EVENTS)],
         # Listings share one endpoint; responses must be matched to their
@@ -184,6 +194,11 @@ class CrawlTests(unittest.TestCase):
         self.assertEqual(t["title"], "First")
         self.assertEqual(t["author"], "alice")
         self.assertEqual(t["replies_state"], "done")
+        sitemap_only = self.store.topic(HOST, "6935006")
+        self.assertEqual(sitemap_only["topic_body_state"], "done")
+        self.assertEqual(sitemap_only["title"], "Sitemap only")
+        self.assertEqual(json.loads(sitemap_only["raw_json"])["content"],
+                         "<p>Full original post</p>")
         rows = list(self.store.db.execute(
             "SELECT * FROM replies WHERE topic_public_id='5001'"))
         self.assertEqual({r["reply_id"] for r in rows}, {"70", "71"})
@@ -459,7 +474,7 @@ class CrawlTests(unittest.TestCase):
         # still no latching stop).
         crawler2, transport2 = make_crawler(self.store, fixtures)
         crawler2.run([HOST])
-        self.assertEqual(len(transport2.sent), 4)  # bootstrap + tree + groups + feeds
+        self.assertEqual(len(transport2.sent), 6)  # bootstrap + refreshes + historical sitemap work
         task = self.store.db.execute(
             "SELECT state FROM tasks WHERE kind='tree'").fetchone()
         self.assertEqual(task["state"], "dead")

@@ -123,6 +123,14 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
 
 ## Known limits (honest)
 
+- **Every discovered public opening post must be archived.** Sitemaps can
+  contain topics absent from listing results. The crawler follows each missing
+  topic URL (including same-host canonical redirects), reads the site's
+  server-rendered `Content/TopicView/V2` object, and saves its complete
+  opening-post HTML. `missing_topic_bodies` makes unresolved stubs fail the
+  completeness check; HTTP 404 responses are separately reported as
+  `unavailable_topic_bodies` rather than silently treated as archived.
+  Existing v2 indexes are upgraded in place without rebuilding the archive.
 - **Nested replies require explicit pagination.** The initial topic response
   embeds just one child per parent. The public forum frontend fetches the
   remaining children via the same replies endpoint with
