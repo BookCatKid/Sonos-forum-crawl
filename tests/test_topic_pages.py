@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from sonos_archive.crawl import Crawler
-from sonos_archive.errors import ShapeError
+from sonos_archive.errors import Denied, ShapeError
 from sonos_archive.forum import FixtureTransport, Session
 from sonos_archive.publish import coverage
 from sonos_archive.store import Store, SCHEMA, canon
@@ -121,6 +121,29 @@ class TopicPageTests(unittest.TestCase):
         cov = coverage(self.store, [HOST])["hosts"][0]
         self.assertEqual(cov["missing_topic_bodies"], 0)
         self.assertEqual(cov["unavailable_topic_bodies"], 1)
+
+    def test_site_forbidden_topic_is_classified_not_retried_forever(self):
+        blocked = ('<html><title>Access Denied | Sonos Community</title>'
+                   '<div data-preact="destination/modules/Core/error-destination/index" '
+                   'data-props="{}"></div></html>')
+        crawler, _ = self.crawler([
+            (403, {"content-type": "text/html"}, blocked)])
+        crawler.execute(HOST, self.store.next_task(HOST))
+        self.assertEqual(self.store.topic(HOST, "158")["topic_body_state"],
+                         "forbidden")
+        cov = coverage(self.store, [HOST])["hosts"][0]
+        self.assertEqual(cov["missing_topic_bodies"], 0)
+        self.assertEqual(cov["unavailable_topic_bodies"], 1)
+        self.assertEqual(cov["forbidden_topic_bodies"], 1)
+
+    def test_generic_403_still_denied(self):
+        crawler, _ = self.crawler([
+            (403, {"content-type": "text/html"},
+             "<html><title>Just a moment...</title></html>")])
+        with self.assertRaises(Denied):
+            crawler.execute(HOST, self.store.next_task(HOST))
+        self.assertEqual(self.store.topic(HOST, "158")["topic_body_state"],
+                         "pending")
 
     def test_unresolved_topic_body_is_incomplete(self):
         cov = coverage(self.store, [HOST])["hosts"][0]

@@ -106,7 +106,14 @@ def write_exports(store, out):
 
 def coverage(store, hosts):
     """Honest coverage report. Never claims completeness it cannot prove."""
-    report = {"generated_at": now_iso(), "hosts": [], "is_complete_mirror": False}
+    report = {
+        "generated_at": now_iso(), "hosts": [],
+        "is_complete_mirror": False,
+        "is_complete_public_text_archive": False,
+        # Image/attachment URLs are indexed in content HTML; their binary
+        # assets are not yet embedded in any published snapshot.
+        "media_assets_archived": False,
+    }
     complete = bool(hosts)
     for host in hosts:
         h = store.host_row(host)
@@ -130,7 +137,11 @@ def coverage(store, hosts):
             "AND topic_body_state='pending'", (host,)).fetchone()[0]
         unavailable_bodies = store.db.execute(
             "SELECT COUNT(*) FROM topics WHERE host=? AND raw_json IS NULL "
-            "AND topic_body_state='gone'", (host,)).fetchone()[0]
+            "AND topic_body_state IN ('gone','forbidden')",
+            (host,)).fetchone()[0]
+        forbidden_bodies = store.db.execute(
+            "SELECT COUNT(*) FROM topics WHERE host=? AND raw_json IS NULL "
+            "AND topic_body_state='forbidden'", (host,)).fetchone()[0]
         host_complete = (bool(leaf) and len(done) == len(leaf)
                          and not missing_bodies
                          and not pending and not denied_tasks and not dead_tasks
@@ -151,17 +162,22 @@ def coverage(store, hosts):
             "missing_nested_replies": tc["missing"],
             "missing_topic_bodies": missing_bodies,
             "unavailable_topic_bodies": unavailable_bodies,
+            "forbidden_topic_bodies": forbidden_bodies,
             "pending_tasks": pending,
             "denied_tasks": denied_tasks,
             "dead_tasks": dead_tasks,
             "complete": host_complete,
         })
-    report["is_complete_mirror"] = complete
-    report["note"] = ("'complete' requires discovered leaf categories all listed, "
+    report["is_complete_public_text_archive"] = complete
+    report["is_complete_mirror"] = complete and report["media_assets_archived"]
+    report["note"] = ("A host's 'complete' refers to public text content: "
+                      "all discovered leaf categories listed, "
                       "zero pending/denied/dead tasks, zero known-missing "
                       "nested replies, and zero unresolved opening posts. "
-                      "Unavailable (HTTP 404) topics are reported separately. "
-                      "It cannot prove undiscovered content is absent.")
+                      "Unavailable HTTP 403/404 topics are reported separately. "
+                      "The full mirror flag remains false until linked media "
+                      "assets are independently preserved. No check can prove "
+                      "that undiscovered content is absent.")
     return report
 
 

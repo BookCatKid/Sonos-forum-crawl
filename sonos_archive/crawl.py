@@ -457,9 +457,13 @@ class Crawler:
                 path.path + ("?" + path.query if path.query else ""),
                 kind="topic", accept="text/html")
         except HttpError as exc:
-            if exc.status == 404:
+            if exc.status in (403, 404):
+                # A genuine Sonos forbidden error screen and a missing URL
+                # are unavailable publicly; do not conflate either with a
+                # successfully archived first post or a transient denial.
                 self.store.set_topic_replies(
-                    host, pid, topic_body_state="gone")
+                    host, pid,
+                    topic_body_state="forbidden" if exc.status == 403 else "gone")
                 return
             raise
         parser = TopicPageParser()

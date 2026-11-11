@@ -189,6 +189,15 @@ class Session:
             raise ShapeError(f"response over {MAX_BODY} bytes at {url}")
         body_text = json.dumps(payload, sort_keys=True) if payload is not None else None
         self.capture(method, url, body_text, r.status, r.body, kind)
+        # Sonos uses a fully rendered Gainsight error page for an explicitly
+        # forbidden public URL (not a CDN challenge). Classify it separately:
+        # retrying this permanently inaccessible topic on every run cannot
+        # recover content, but generic 403s must still retry as denials.
+        if (kind == "topic" and r.status == 403
+                and "html" in r.header("content-type")
+                and 'data-preact="destination/modules/Core/error-destination/index"' in r.text()
+                and re.search(r"<title>\s*Access Denied\s*\|", r.text(), re.I)):
+            raise HttpError(403, url)
         reason = r.denial_reason()
         if reason:
             raise Denied(reason, url=url, status=r.status, snippet=r.snippet())

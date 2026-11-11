@@ -141,6 +141,14 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
   stable `publicReplyId` values and preserves alias provenance. Any
   unresolved children remain visible in `missing_nested_replies`.
 - A topic whose replies endpoint 404s is marked `replies_state = "gone"`.
+  Public topic pages serving Sonos's own HTTP 403 error template are marked
+  `topic_body_state = "forbidden"`; real 404s are marked `"gone"`.
+  Other 403 responses remain retryable denials rather than being mislabeled.
+- **A full self-contained mirror is not yet achieved.** The JSON exports
+  preserve referenced image URLs and attachment metadata, but media binary
+  files themselves have not been downloaded and published. The manifest
+  distinguishes `is_complete_public_text_archive` from
+  `is_complete_mirror`, and keeps the latter false until media is preserved.
 - Denied and dead-lettered tasks are retried next run without resetting
   pagination cursors. A persistent denial remains visible in coverage.
 - GitHub Actions capture jobs report failure for denials or task errors,
