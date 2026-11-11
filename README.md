@@ -161,6 +161,31 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
 - GitHub's scheduler is not a realtime SLA; runs may be delayed or dropped.
   Snapshots are the durable state, so a missed run only delays capture.
 
+## Public media backfill
+
+The `.github/workflows/media.yml` workflow runs separately from the text
+crawler. It retrieves the latest immutable snapshot, discovers images in post
+HTML, full-size image links, and the forum's own attachment metadata, then
+archives downloaded binary files in immutable `media-000001`,
+`media-000002`, ... releases.
+
+Each media release contains an incremental `media.tar.gz` pack of original
+bytes named by SHA-256, a *cumulative* `media-index.json.gz` recording each
+URL's status, and `media-manifest.json` with hashes, provenance, and counts.
+The workflow checks the previous index checksum and persists progress
+independently of the text snapshot lineage.
+
+Downloads are restricted to known public media hosts, with safe redirect
+handling and per-file/per-run size limits. Unsupported external hosts, missing
+media, and oversized files remain visible as **unresolved**, not archived.
+A successful media batch is not proof of a complete offline mirror.
+
+To dispatch a small verification batch:
+
+```sh
+gh workflow run media.yml -R BookCatKid/Sonos-forum-crawl -f max_assets=40
+```
+
 ## Tests
 
 ```

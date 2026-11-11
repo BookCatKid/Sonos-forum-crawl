@@ -1,0 +1,126 @@
+name: media
+
+on:
+  schedule:
+    - cron: "37 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      max_assets:
+        description: "Maximum media fetches in this batch"
+        required: false
+        type: number
+        default: 1000
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sonos-archive-media
+  cancel-in-progress: false
+
+jobs:
+  media:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Offline media regression gate
+        run: python3 -m unittest tests.test_media -q
+
+      - name: Archive public forum media incrementally
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAX_ASSETS: ${{ inputs.max_assets || 1000 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/sonos-media"
+          mkdir -p "$ROOT/source" "$ROOT/previous" "$ROOT/stage"
+
+          # Independent immutable lineages for text snapshots and media packs.
+          RELEASES="$(gh release list -R "$GITHUB_REPOSITORY" --limit 500 --json tagName,isDraft)"
+          SNAPSHOT="$(python3 -c 'import json,sys; r=json.load(sys.stdin); tags=[i["tagName"] for i in r if not i["isDraft"] and i["tagName"].startswith("snapshot-")]; print(max(tags) if tags else "")' <<< "$RELEASES")"
+          PREVIOUS="$(python3 -c 'import json,sys; r=json.load(sys.stdin); tags=[i["tagName"] for i in r if not i["isDraft"] and i["tagName"].startswith("media-")]; print(max(tags) if tags else "")' <<< "$RELEASES")"
+          test -n "$SNAPSHOT" || { echo "No published snapshot"; exit 1; }
+          echo "Source snapshot: $SNAPSHOT; last media pack: ${PREVIOUS:-none}"
+          gh release download "$SNAPSHOT" -R "$GITHUB_REPOSITORY" -p state.tar.gz -p manifest.json -D "$ROOT/source"
+          python3 - "$ROOT/source" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          m = json.loads((root / "manifest.json").read_text())
+          obj = m["assets"]["state.tar.gz"]
+          p = root / "state.tar.gz"
+          assert p.stat().st_size == obj["size"], "snapshot size mismatch"
+          h = hashlib.sha256()
+          with p.open("rb") as f:
+              for chunk in iter(lambda: f.read(1 << 20), b""):
+                  h.update(chunk)
+          assert h.hexdigest() == obj["sha256"], "snapshot checksum mismatch"
+          PY
+          tar -xzf "$ROOT/source/state.tar.gz" -C "$ROOT/source" index.sqlite
+          rm "$ROOT/source/state.tar.gz"
+
+          PREVIOUS_ARGS=()
+          if [ -n "$PREVIOUS" ]; then
+            gh release download "$PREVIOUS" -R "$GITHUB_REPOSITORY" \
+              -p media-index.json.gz -p media-manifest.json -D "$ROOT/previous"
+            python3 - "$ROOT/previous" "$PREVIOUS" <<'PY'
+          import hashlib, json, pathlib, sys
+          root, tag = pathlib.Path(sys.argv[1]), sys.argv[2]
+          m = json.loads((root / "media-manifest.json").read_text())
+          assert m["tag"] == tag, "media index tag mismatch"
+          obj = m["assets"]["media-index.json.gz"]
+          p = root / "media-index.json.gz"
+          assert p.stat().st_size == obj["size"], "media index size mismatch"
+          h = hashlib.sha256()
+          with p.open("rb") as f:
+              for chunk in iter(lambda: f.read(1 << 20), b""):
+                  h.update(chunk)
+          assert h.hexdigest() == obj["sha256"], "media index checksum mismatch"
+          PY
+            PREVIOUS_ARGS=(--previous "$ROOT/previous/media-index.json.gz")
+          fi
+
+          python3 -m sonos_archive.media \
+            --index "$ROOT/source/index.sqlite" \
+            --stage "$ROOT/stage" \
+            --max-assets "$MAX_ASSETS" --max-bytes 367001600 \
+            --max-seconds 12500 "${PREVIOUS_ARGS[@]}"
+
+          TAG="$(python3 - "$PREVIOUS" <<'PY'
+          import sys
+          p = sys.argv[1]
+          print("media-%06d" % (int(p.partition("-")[2]) + 1 if p else 1))
+          PY
+          )"
+          python3 - "$ROOT/stage/media-manifest.json" "$TAG" "$PREVIOUS" "$SNAPSHOT" <<'PY'
+          import json, pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          m = json.loads(p.read_text())
+          m.update(tag=sys.argv[2], previous=sys.argv[3] or None,
+                   source_snapshot=sys.argv[4])
+          p.write_text(json.dumps(m, sort_keys=True, indent=2) + "\n")
+          print("Media batch:", m["tag"], m["counts"])
+          PY
+
+          # A failed upload may leave a draft. Published releases are immutable.
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft >/dev/null 2>&1; then
+            IS_DRAFT="$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)"
+            test "$IS_DRAFT" = true || { echo "Published $TAG already exists"; exit 1; }
+            gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" \
+            "$ROOT/stage/media.tar.gz" \
+            "$ROOT/stage/media-index.json.gz" \
+            "$ROOT/stage/media-manifest.json" \
+            -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft \
+            --latest=false --title "Sonos forum media $TAG" \
+            --notes "Incremental public media; previous: ${PREVIOUS:-none}; source: $SNAPSHOT"
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest=false
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json tagName,isDraft,url \
+            --jq '{tag:.tagName,draft:.isDraft,url}'
