@@ -138,8 +138,12 @@ class Crawler:
 
     # ---- seeding ---------------------------------------------------------
     def seed(self, host):
-        """Runs at the top of every run: refresh the tree + standalone feeds,
-        and re-fetch the topic sitemaps once a day."""
+        """Refresh the tree, standalone feeds, and topic sitemaps each run.
+
+        Live sitemaps can gain new topic IDs between captures. A previous
+        24-hour throttle silently left newly listed topics absent even after
+        a successful production run with zero pending tasks.
+        """
         self.store.host_row(host)
         base = "https://" + host
         self.store.revive_task(
@@ -153,14 +157,8 @@ class Crawler:
         # not in the accessible category tree.
         self.store.revive_task(host, "groups", "groups", base + "/groups",
                                at=now_iso())
-        try:
-            last_sitemap = float(self.store.meta(f"sitemap_{host}", "0"))
-        except ValueError:
-            last_sitemap = 0.0
-        if time.time() - last_sitemap >= 86400:
-            self.store.revive_task(host, "sitemap", "sitemap",
-                                   base + "/sitemap.xml", at=now_iso())
-            self.store.set_meta(f"sitemap_{host}", str(int(time.time())))
+        self.store.revive_task(host, "sitemap", "sitemap",
+                               base + "/sitemap.xml", at=now_iso())
 
     # ---- threaded reply recovery ----------------------------------------
     def _queue_nested(self, host, topic_id, node, content_type):

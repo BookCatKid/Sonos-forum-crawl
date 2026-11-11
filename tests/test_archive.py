@@ -442,6 +442,20 @@ class CrawlTests(unittest.TestCase):
                     in transport.sent if url.endswith(f"/topic/{pid}/replies")]
         self.assertEqual(requests, [0, 2])
 
+    def test_sitemap_is_refreshed_even_with_recent_previous_capture(self):
+        # A new live sitemap topic was missing from snapshot-000184 despite
+        # a successful capture: the old 24h throttle skipped discovery.
+        crawler, _transport = make_crawler(self.store, standard_fixtures())
+        crawler.seed(HOST)
+        self.store.set_task(HOST, "sitemap", "sitemap", state="done",
+                            updated_at="2026-11-11T00:00:00Z")
+        self.store.set_meta(f"sitemap_{HOST}", str(9999999999))
+        crawler.seed(HOST)
+        row = self.store.db.execute(
+            "SELECT state FROM tasks WHERE host=? AND kind='sitemap'",
+            (HOST,)).fetchone()
+        self.assertEqual(row["state"], "pending")
+
     def test_everything_is_crawled(self):
         # No exclusions: sitemap topics including id 6935006 are archived.
         crawler, transport = make_crawler(self.store, standard_fixtures())
@@ -474,7 +488,7 @@ class CrawlTests(unittest.TestCase):
         # still no latching stop).
         crawler2, transport2 = make_crawler(self.store, fixtures)
         crawler2.run([HOST])
-        self.assertEqual(len(transport2.sent), 6)  # bootstrap + refreshes + historical sitemap work
+        self.assertEqual(len(transport2.sent), 7)  # bootstrap + refreshes including live sitemap
         task = self.store.db.execute(
             "SELECT state FROM tasks WHERE kind='tree'").fetchone()
         self.assertEqual(task["state"], "dead")
@@ -494,8 +508,8 @@ class CrawlTests(unittest.TestCase):
 
     def test_resume_across_runs(self):
         # A finished run leaves nothing pending; the next run performs only
-        # its small fixed refresh set (bootstrap + tree + 2 feeds) and finds
-        # no new work.
+        # its small fixed refresh set (bootstrap + tree + feeds + sitemaps)
+        # and finds no new work.
         crawler, _t = make_crawler(self.store, standard_fixtures())
         crawler.run([HOST])
         self.assertEqual(self.store.pending_count(HOST), 0)
@@ -508,6 +522,8 @@ class CrawlTests(unittest.TestCase):
             ("GET", BASE + "/groups"),
             ("GET", BASE + "/productUpdates/topics?page=1"),
             ("GET", BASE + "/events/events?page=1"),
+            ("GET", BASE + "/sitemap.xml"),
+            ("GET", BASE + "/sitemap-topics-1.xml"),
         ]))
         self.assertEqual(self.store.pending_count(HOST), 0)
         # No re-listing, no re-crawling replies.
