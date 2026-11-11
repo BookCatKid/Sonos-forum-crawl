@@ -49,6 +49,7 @@ EXTENSIONS = re.compile(
     r"webm|ogg|wav|zip|txt|docx?|pptx?|xlsx?)(?:$|[?#])", re.I)
 MAX_ITEM_BYTES = 20 * 1024 * 1024
 RETRY_AFTER_SECONDS = 7 * 86400
+TRANSIENT_RETRY_SECONDS = 1800  # next scheduled batch, not a week
 MAX_REDIRECTS = 4
 
 
@@ -252,7 +253,10 @@ def batch(index_path, previous_path, stage, max_assets=1000,
             if not approved_host(url):
                 index[url] = {"status": "unsupported", **meta}
                 continue
-            if prior and now - prior.get("checked", 0) < RETRY_AFTER_SECONDS:
+            cooldown = (TRANSIENT_RETRY_SECONDS
+                        if prior and prior.get("status") == "retryable"
+                        else RETRY_AFTER_SECONDS)
+            if prior and now - prior.get("checked", 0) < cooldown:
                 continue
             if (attempts >= max_assets or new_bytes >= max_bytes or
                     time.monotonic() - start >= max_seconds):
@@ -280,8 +284,15 @@ def batch(index_path, previous_path, stage, max_assets=1000,
                 new_downloads += 1
             except (ValueError, HTTPError, URLError, TimeoutError, OSError) as exc:
                 new_failures += 1
+                # HTTP 429, temporary origin failures and transport errors
+                # must not be treated like permanently missing public files.
+                transient = (
+                    isinstance(exc, HTTPError) and
+                    (exc.code in (408, 425, 429) or exc.code >= 500)
+                ) or (isinstance(exc, (URLError, TimeoutError, OSError))
+                      and not isinstance(exc, HTTPError))
                 index[url] = {
-                    "status": "unavailable",
+                    "status": "retryable" if transient else "unavailable",
                     "error": str(exc)[:240], "checked": now, **meta,
                 }
     with gzip.open(stage / "media-index.json.gz", "wt", encoding="utf8") as f:
@@ -293,6 +304,8 @@ def batch(index_path, previous_path, stage, max_assets=1000,
         "unsupported": sum(not approved_host(u) for u in discovered),
         "unavailable": sum(x.get("status") == "unavailable"
                            for u, x in index.items() if u in discovered),
+        "retryable": sum(x.get("status") == "retryable"
+                         for u, x in index.items() if u in discovered),
         "unprocessed": sum(approved_host(u) and u not in index
                            for u in discovered),
         "new_downloads": new_downloads,

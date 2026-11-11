@@ -2,6 +2,7 @@
 import hashlib
 import gzip
 import json
+from urllib.error import HTTPError
 from unittest.mock import patch
 from pathlib import Path
 import tarfile
@@ -123,6 +124,21 @@ class MediaTests(unittest.TestCase):
             index = json.load(f)
         self.assertEqual(index["https://zzzz.other.example/last.jpg"]["status"],
                          "unsupported")
+
+    def test_transient_rate_limit_is_retryable_not_permanently_missing(self):
+        def throttled(url, max_bytes):
+            raise HTTPError(url, 429, "Too Many Requests", {}, None)
+        stage = self.root / "limited-by-origin"
+        report = media.batch(self.store.root / "index.sqlite", None, stage,
+                             max_assets=4, downloader=throttled)
+        self.assertEqual(report["counts"]["retryable"], 4)
+        self.assertEqual(report["counts"]["unavailable"], 0)
+        immediately = media.batch(
+            self.store.root / "index.sqlite",
+            stage / "media-index.json.gz", self.root / "retry-after",
+            max_assets=4, downloader=throttled)
+        self.assertEqual(immediately["counts"]["attempts"], 0)
+        self.assertEqual(immediately["counts"]["retryable"], 4)
 
     def test_parses_anchor_original_and_thumbnail(self):
         p=media.MediaParser()
