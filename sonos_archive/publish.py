@@ -106,7 +106,7 @@ def write_exports(store, out):
 def coverage(store, hosts):
     """Honest coverage report. Never claims completeness it cannot prove."""
     report = {"generated_at": now_iso(), "hosts": [], "is_complete_mirror": False}
-    complete = True
+    complete = bool(hosts)
     for host in hosts:
         h = store.host_row(host)
         cats = store.categories(host)
@@ -124,8 +124,10 @@ def coverage(store, hosts):
         dead_tasks = store.db.execute(
             "SELECT COUNT(*) c FROM tasks WHERE host=? AND state='dead'",
             (host,)).fetchone()["c"]
-        if pending or denied_tasks or tc["pending"] or tc["missing"] \
-                or (leaf and len(done) < len(leaf)):
+        host_complete = (bool(leaf) and len(done) == len(leaf)
+                         and not pending and not denied_tasks and not dead_tasks
+                         and not tc["pending"] and not tc["missing"])
+        if not host_complete:
             complete = False
         report["hosts"].append({
             "host": host,
@@ -142,13 +144,12 @@ def coverage(store, hosts):
             "pending_tasks": pending,
             "denied_tasks": denied_tasks,
             "dead_tasks": dead_tasks,
-            "complete": bool(leaf) and len(done) == len(leaf) and not pending
-                        and not tc["pending"] and not tc["missing"],
+            "complete": host_complete,
         })
     report["is_complete_mirror"] = complete
-    report["note"] = ("'complete' requires every leaf category fully listed, "
-                      "zero pending/denied tasks and zero known-missing "
-                      "nested replies. Anything less is partial.")
+    report["note"] = ("'complete' requires discovered leaf categories all listed, "
+                      "zero pending/denied/dead tasks and zero known-missing "
+                      "nested replies. It cannot prove undiscovered content is absent.")
     return report
 
 
@@ -164,8 +165,20 @@ def build_snapshot(store, hosts, stage_dir, previous_tag, since_seq, run_id):
     dest.close()
     (stage / "index.sqlite.tmp").rename(stage / "index.sqlite")
 
-    write_exports(store, stage)
-    cov = coverage(store, hosts)
+    # All exports, metadata and the raw-blob cursor must refer to the exact
+    # same SQLite backup. The live crawler may keep writing during staging.
+    frozen = Store(stage)
+    frozen.raw_root = store.raw_root
+    try:
+        write_exports(frozen, stage)
+        cov = coverage(frozen, hosts)
+        counts = frozen.counts()
+        capture_cursor = frozen.last_capture_seq()
+        if since_seq > capture_cursor:
+            raise ArchiveError("snapshot capture cursor moved backwards")
+        blobs = frozen.captures_after(since_seq)
+    finally:
+        frozen.close()
     (stage / "coverage.json").write_text(json.dumps(cov, indent=2), encoding="utf-8")
 
     with tarfile.open(stage / "state.tar.gz", "w:gz", format=tarfile.PAX_FORMAT) as tf:
@@ -174,12 +187,12 @@ def build_snapshot(store, hosts, stage_dir, previous_tag, since_seq, run_id):
         for name in STATE_FILES:
             (stage / name).unlink()
 
-    blobs = store.captures_after(since_seq)
     with tarfile.open(stage / "raw.tar.gz", "w:gz", format=tarfile.PAX_FORMAT) as tf:
         for row in blobs:
             path = store.blob_path(row["sha"])
-            if path.exists():
-                tf.add(path, arcname=f"raw/sha256/{row['sha'][:2]}/{row['sha']}.gz")
+            if not path.is_file():
+                raise ArchiveError(f"missing new raw capture blob: {row['sha']}")
+            tf.add(path, arcname=f"raw/sha256/{row['sha'][:2]}/{row['sha']}.gz")
 
     manifest = {
         "format": 2,
@@ -189,7 +202,8 @@ def build_snapshot(store, hosts, stage_dir, previous_tag, since_seq, run_id):
         "created_at": now_iso(),
         "version": __version__,
         "run_id": run_id,
-        "counts": store.counts(),
+        "counts": counts,
+        "capture_cursor": capture_cursor,
         "new_capture_blobs": len(blobs),
         "coverage": cov,
         "assets": {},
@@ -215,21 +229,32 @@ def finalize_manifest(stage, manifest, seq):
 SNAPSHOT_FORMAT = 2
 
 
-def verify_dir(stage):
-    """Check a snapshot directory against its manifest. Returns manifest."""
+def verified_manifest(stage):
+    """Read a manifest after authenticating its separately stored checksum."""
     stage = Path(stage)
-    manifest = json.loads((stage / "manifest.json").read_text())
+    raw = (stage / "manifest.json").read_bytes()
+    digest = (stage / "manifest.sha256").read_text().strip()
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise ArchiveError("manifest.sha256 does not match manifest.json")
+    manifest = json.loads(raw)
     if manifest.get("format") != SNAPSHOT_FORMAT or "assets" not in manifest:
         raise ArchiveError("incompatible snapshot format")
-    digest = (stage / "manifest.sha256").read_text().strip()
-    if digest != hashlib.sha256(json.dumps(manifest, indent=2, sort_keys=True).encode()).hexdigest():
-        raise ArchiveError("manifest.sha256 does not match manifest.json")
+    return manifest
+
+
+def verify_asset(path, metadata):
+    path = Path(path)
+    if (not path.is_file() or path.stat().st_size != metadata["size"]
+            or sha256_file(path) != metadata["sha256"]):
+        raise ArchiveError(f"asset {path.name} missing or hash/size mismatch")
+
+
+def verify_dir(stage):
+    """Check all assets in a complete snapshot directory."""
+    stage = Path(stage)
+    manifest = verified_manifest(stage)
     for name, meta in manifest["assets"].items():
-        p = stage / name
-        if not p.exists():
-            raise ArchiveError(f"missing asset {name}")
-        if p.stat().st_size != meta["size"] or sha256_file(p) != meta["sha256"]:
-            raise ArchiveError(f"asset {name} hash/size mismatch")
+        verify_asset(stage / name, meta)
     return manifest
 
 
@@ -246,26 +271,53 @@ def _safe_extract(tf, root):
         dest.write_bytes(tf.extractfile(member).read())
 
 
+def restore_raw_into(store_root, raw_tar):
+    """Hydrate one verified incremental raw pack."""
+    with tarfile.open(raw_tar, "r:gz") as tf:
+        for member in tf.getmembers():
+            if member.isfile() and not re.fullmatch(
+                    r"raw/sha256/[0-9a-f]{2}/[0-9a-f]{64}\.gz", member.name):
+                raise ArchiveError(f"unexpected raw member: {member.name}")
+        _safe_extract(tf, store_root)
+
+
+def verify_raw_coverage(store_root):
+    """Ensure every captured SHA exists after complete chain hydration."""
+    db = sqlite3.connect(Path(store_root) / "index.sqlite")
+    try:
+        missing = [
+            sha for (sha,) in db.execute("SELECT DISTINCT sha FROM captures")
+            if not (Path(store_root) / "raw" / "sha256" / sha[:2] / (sha + ".gz")).is_file()
+        ]
+    finally:
+        db.close()
+    if missing:
+        raise ArchiveError(
+            f"{len(missing)} historical raw capture blobs missing from release lineage "
+            f"(first SHA {missing[0]}); existing snapshots may contain data gaps")
+
+
 def restore_into(store_root, state_tar, raw_tars=()):
-    """Extract index.sqlite (and any raw blobs) into a fresh archive root."""
+    """Extract the latest index and supplied incremental raw packs."""
     root = Path(store_root)
-    with tarfile.open(state_tar) as tf:
+    root.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(state_tar, "r:gz") as tf:
         _safe_extract(tf, root)
     index = root / "index.sqlite"
     if index.exists():
         try:
             db = sqlite3.connect(index)
-            row = db.execute(
-                "SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            db.close()
+            try:
+                row = db.execute(
+                    "SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            finally:
+                db.close()
             if not row or int(row[0]) != SCHEMA_VERSION:
                 raise ArchiveError("snapshot schema version mismatch")
-        except sqlite3.Error:
-            raise ArchiveError("snapshot index is not a valid database")
+        except sqlite3.Error as exc:
+            raise ArchiveError("snapshot index is not a valid database") from exc
     for raw in raw_tars or []:
-        if Path(raw).exists() and Path(raw).stat().st_size > 0:
-            with tarfile.open(raw) as tf:
-                _safe_extract(tf, root)
+        restore_raw_into(root, raw)
 
 
 # ---------------------------------------------------------------- remotes
@@ -285,14 +337,28 @@ class LocalRemote:
                 best = s
         return self.snaps / tag_for(best) if best else None
 
-    def restore(self, work_root):
+    def restore(self, work_root, *, include_historical_raw=True):
         latest = self.latest()
         if latest is None:
             return None, -1
-        verify_dir(latest)
-        manifest = json.loads((latest / "manifest.json").read_text())
+        manifest = verify_dir(latest)
         restore_into(work_root, latest / "state.tar.gz", [latest / "raw.tar.gz"])
-        return manifest, manifest["counts"]["captures"]
+        if include_historical_raw:
+            seen = {manifest["tag"]}
+            previous = manifest.get("previous")
+            while previous:
+                if previous in seen or seq_of(previous) is None:
+                    raise ArchiveError(f"invalid/cyclic snapshot lineage: {previous}")
+                seen.add(previous)
+                ancestor = self.snaps / previous
+                old = verified_manifest(ancestor)
+                if old.get("tag") != previous:
+                    raise ArchiveError(f"snapshot lineage mismatch: {previous}")
+                verify_asset(ancestor / "raw.tar.gz", old["assets"]["raw.tar.gz"])
+                restore_raw_into(work_root, ancestor / "raw.tar.gz")
+                previous = old.get("previous")
+            verify_raw_coverage(work_root)
+        return manifest, manifest.get("capture_cursor", manifest["counts"]["captures"])
 
     def publish(self, stage, manifest):
         latest = self.latest()
@@ -371,24 +437,45 @@ class GithubRemote:
                 return dest
         raise ArchiveError(f"release {rel.get('tag_name')} missing asset {name}")
 
-    def restore(self, work_root):
+    def restore(self, work_root, *, include_historical_raw=True):
         latest = self.latest()
         if latest is None:
             return None, -1
         _seq, rel = latest
         with tempfile.TemporaryDirectory() as td:
-            state = self._download_asset(rel, "state.tar.gz", Path(td) / "state.tar.gz")
-            raw = self._download_asset(rel, "raw.tar.gz", Path(td) / "raw.tar.gz")
-            manifest_path = self._download_asset(rel, "manifest.json", Path(td) / "manifest.json")
-            manifest = json.loads(Path(manifest_path).read_text())
-            if manifest.get("format") != SNAPSHOT_FORMAT or "assets" not in manifest:
-                raise ArchiveError("incompatible snapshot format")
-            if manifest["assets"]["state.tar.gz"]["sha256"] != sha256_file(state):
-                raise ArchiveError("downloaded state.tar.gz hash mismatch")
-            if manifest["assets"]["raw.tar.gz"]["sha256"] != sha256_file(raw):
-                raise ArchiveError("downloaded raw.tar.gz hash mismatch")
+            stage = Path(td)
+            state = self._download_asset(rel, "state.tar.gz", stage / "state.tar.gz")
+            raw = self._download_asset(rel, "raw.tar.gz", stage / "raw.tar.gz")
+            self._download_asset(rel, "manifest.json", stage / "manifest.json")
+            self._download_asset(rel, "manifest.sha256", stage / "manifest.sha256")
+            manifest = verified_manifest(stage)
+            if manifest.get("tag") != rel.get("tag_name"):
+                raise ArchiveError("latest release/manifest tag mismatch")
+            verify_asset(state, manifest["assets"]["state.tar.gz"])
+            verify_asset(raw, manifest["assets"]["raw.tar.gz"])
             restore_into(work_root, state, [raw])
-        return manifest, manifest["counts"]["captures"]
+            if include_historical_raw:
+                seen = {manifest["tag"]}
+                previous = manifest.get("previous")
+                while previous:
+                    if previous in seen or seq_of(previous) is None:
+                        raise ArchiveError(f"invalid/cyclic snapshot lineage: {previous}")
+                    seen.add(previous)
+                    _status, ancestor_rel, _headers = self._req(
+                        "GET", f"{self.api_base}/repos/{self.repo}/releases/tags/{previous}")
+                    if ancestor_rel.get("draft"):
+                        raise ArchiveError(f"snapshot {previous} is not published")
+                    self._download_asset(ancestor_rel, "manifest.json", stage / "manifest.json")
+                    self._download_asset(ancestor_rel, "manifest.sha256", stage / "manifest.sha256")
+                    old = verified_manifest(stage)
+                    if old.get("tag") != previous:
+                        raise ArchiveError(f"snapshot lineage mismatch: {previous}")
+                    self._download_asset(ancestor_rel, "raw.tar.gz", stage / "raw.tar.gz")
+                    verify_asset(stage / "raw.tar.gz", old["assets"]["raw.tar.gz"])
+                    restore_raw_into(work_root, stage / "raw.tar.gz")
+                    previous = old.get("previous")
+                verify_raw_coverage(work_root)
+        return manifest, manifest.get("capture_cursor", manifest["counts"]["captures"])
 
     def publish(self, stage, manifest):
         seq = (self.latest()[0] + 1) if self.latest() else 1

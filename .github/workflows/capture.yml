@@ -45,10 +45,6 @@ jobs:
           if [ -n "${{ inputs.host || '' }}" ]; then
             ARGS+=(--host "${{ inputs.host }}")
           fi
-          # Exit codes: 0 clean, 3 denials seen (still publishes), 4 task errors.
-          code=0
-          python3 -m sonos_archive capture "${ARGS[@]}" || code=$?
-          case "$code" in
-            0|3|4) exit 0 ;;
-            *) exit "$code" ;;
-          esac
+          # Capture always publishes checkpoints before returning its status.
+          # Do not mark denied/failed work as a green job.
+          python3 -m sonos_archive capture "${ARGS[@]}"

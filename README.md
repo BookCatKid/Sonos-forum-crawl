@@ -56,9 +56,11 @@ tests/test_archive.py  offline suite against a scripted transport
 
 ### How a run works
 
-1. **Restore.** The newest published `snapshot-NNNNNN` release's
-   `state.tar.gz` (+ `raw.tar.gz`) is downloaded and hash-verified, then
-   extracted into a fresh working root.
+1. **Restore for crawling.** The newest published `snapshot-NNNNNN`
+   release's `state.tar.gz` and incremental `raw.tar.gz` are downloaded
+   and checksum-verified. The crawler only needs the latest index and its
+   newly captured blobs; older raw bodies stay in immutable ancestor releases.
+   The separate `restore` command hydrates the **entire** raw lineage.
 2. **Seed** (first run per host): category tree, `sitemap.xml`, and the two
    standalone feeds (`/productUpdates/topics`, `/events/events`).
 3. **Crawl.** A SQLite task queue drives the run: the tree yields leaf
@@ -92,7 +94,8 @@ Snapshot release `snapshot-NNNNNN` assets:
 state.tar.gz    index.sqlite + topics.jsonl + replies.jsonl + events.jsonl
                 + coverage.json
 raw.tar.gz      raw blobs added since the previous snapshot
-manifest.json   format, sequence, lineage, asset hashes, counts, coverage
+manifest.json   format, sequence, lineage, exact capture cursor, asset hashes,
+                counts and coverage, all from one frozen SQLite backup
 manifest.sha256 checksum of manifest.json
 ```
 
@@ -110,6 +113,7 @@ python3 -m sonos_archive capture [--host en.community.sonos.com] \
     [--checkpoint-seconds 240] [--no-publish] [--fixtures file.json]
 
 python3 -m sonos_archive status   [--remote ...] [--archive-dir ...]
+python3 -m sonos_archive restore  [--remote ...] [--archive-dir ...] --out new-dir
 python3 -m sonos_archive verify   [--archive-dir ...] [--snapshot-dir dir]
 python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --out dir
 ```
@@ -125,8 +129,15 @@ python3 -m sonos_archive export   [--snapshot-dir dir | --archive-root dir] --ou
   `inclusiveVisibleReplyCount` is compared against what was captured and the
   shortfall is counted as `missing_nested_replies`, never silently dropped.
 - A topic whose replies endpoint 404s is marked `replies_state = "gone"`.
-- Denied tasks are retried next run; a persistent denial shows up as
-  `denials` + `denied_tasks` in coverage.
+- Denied and dead-lettered tasks are retried next run without resetting
+  pagination cursors. A persistent denial remains visible in coverage.
+- GitHub Actions capture jobs report failure for denials or task errors,
+  **after** saving checkpoints. A green CI run only validates the offline tests.
+- Full historical restore verifies the manifest and raw archive of every
+  ancestor, then checks that every indexed capture's SHA has a corresponding
+  raw blob. Existing historical gaps cannot be reconstructed if no prior
+  release contains the original response. The command reports such gaps
+  rather than silently claiming a complete archive.
 - GitHub's scheduler is not a realtime SLA; runs may be delayed or dropped.
   Snapshots are the durable state, so a missed run only delays capture.
 

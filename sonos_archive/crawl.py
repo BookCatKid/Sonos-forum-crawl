@@ -25,7 +25,6 @@ from .errors import Denied, HttpError, NetworkError, ShapeError
 from .forum import Session, now_iso
 from .store import PRIORITY, canon
 
-SITEMAP_FILE_LIMIT = 30          # per host
 STANDALONE_PAGE_LIMIT = 200      # per standalone feed
 TOPICS_PAGE_SIZE = 25
 REPLIES_PAGE_SIZE = 20
@@ -141,7 +140,7 @@ class Crawler:
     def run(self, hosts):
         for host in hosts:
             self.seed(host)
-            self.store.revive_denied(host)
+            self.store.revive_failed(host)
         while True:
             progressed = False
             for host in hosts:
@@ -258,7 +257,7 @@ class Crawler:
         locs = re.findall(r"<loc>([^<]+)</loc>", r.text())
         if not locs:
             raise ShapeError("sitemap.xml contained no <loc> entries")
-        for loc in locs[:SITEMAP_FILE_LIMIT]:
+        for loc in locs:
             # Only the topics sitemaps carry topic URLs; structure sitemap
             # entries are category pages already covered by the tree.
             if re.search(r"sitemap-topics-\d+\.xml$", loc):
@@ -302,7 +301,9 @@ class Crawler:
             for t in topics:
                 self._record_topic(host, t, seq)
             total_pages = body.get("totalPageCount") or 1
-        if page < min(total_pages, STANDALONE_PAGE_LIMIT):
+        if page < total_pages:
+            if page >= STANDALONE_PAGE_LIMIT:
+                raise ShapeError(f"standalone feed exceeds {STANDALONE_PAGE_LIMIT} pages: {path}")
             next_path = re.sub(r"page=\d+", f"page={page + 1}", path)
             self.task(host, "standalone", next_path, "https://" + host + next_path)
 
@@ -321,7 +322,9 @@ class Crawler:
         page = payload["pagination"]["page"]
         fetched = page * payload["pagination"]["pageSize"]
         self.store.set_category(host, cid, listed_total=total)
-        if fetched < total and page < MAX_CATEGORY_PAGES:
+        if fetched < total:
+            if page >= MAX_CATEGORY_PAGES:
+                raise ShapeError(f"category {cid} listing exceeds {MAX_CATEGORY_PAGES} pages")
             # Same task, next page: stays pending and is popped again later.
             self.store.set_task(host, "listing", cid,
                                 payload=canon(self._listing_body(cid, page + 1)),
@@ -427,6 +430,8 @@ class Crawler:
 
         meta = replies.get("metadata") or {}
         has_more = bool(meta.get("hasMore"))
+        if has_more and not result:
+            raise ShapeError(f"replies for {pid} claim more pages but returned zero rows")
         offset = payload.get("offset", 0)
         topic = self.store.topic(host, pid)
         fields = {

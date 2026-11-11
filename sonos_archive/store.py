@@ -183,10 +183,16 @@ class Store:
         self.db.execute(f"UPDATE hosts SET {cols} WHERE host=?", (*fields.values(), host))
         self.db.commit()
 
-    def revive_denied(self, host):
-        """Denied tasks are per-run: a new run tries them all again."""
-        self.db.execute("UPDATE tasks SET state='pending' WHERE host=? AND state='denied'",
-                        (host,))
+    def revive_failed(self, host):
+        """Retry denied and dead tasks once in a new run, preserving cursors.
+
+        Failures must not be permanently stranded in the archive. The crawler
+        still caps denial retries within each run and dead-letters failed
+        attempts until the *next* run, avoiding an infinite hot loop.
+        """
+        self.db.execute(
+            "UPDATE tasks SET state='pending' WHERE host=? AND state IN ('denied','dead')",
+            (host,))
         self.db.commit()
 
     # ---- tasks ----------------------------------------------------------

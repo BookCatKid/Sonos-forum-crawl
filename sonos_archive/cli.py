@@ -70,22 +70,17 @@ def cmd_capture(args):
     work = Path(args.archive_dir) / "work"
     shutil.rmtree(work, ignore_errors=True)
 
-    manifest_prev, since_seq = None, -1
+    # A capture only needs the latest durable index and new raw captures.
+    # Historical raw files remain available through the immutable release
+    # lineage and can be hydrated by a full restore when needed.
+    # Never silently reset on a restore failure: that would fork the archive.
     try:
-        manifest_prev, since_seq = remote.restore(work)
-    except ArchiveError as e:
-        print(f"restore failed ({e}); starting from an empty archive root",
-              file=sys.stderr)
-        shutil.rmtree(work, ignore_errors=True)
-    work.mkdir(parents=True, exist_ok=True)
-
-    try:
-        store = Store(work)
-    except (ValueError, OSError) as e:
-        print(f"incompatible index ({e}); rebuilding from scratch", file=sys.stderr)
-        shutil.rmtree(work, ignore_errors=True)
+        manifest_prev, since_seq = remote.restore(work, include_historical_raw=False)
         work.mkdir(parents=True, exist_ok=True)
         store = Store(work)
+    except (ArchiveError, ValueError, OSError) as e:
+        print(f"cannot restore archive safely: {e}", file=sys.stderr)
+        return 4
 
     published = []
     publish_error = [None]
@@ -111,7 +106,7 @@ def cmd_capture(args):
                     reader, hosts, stage, prev_tag[0], last_seq[0], crawler.run_id)
                 manifest = remote.publish(stage, manifest)
                 prev_tag[0] = manifest["tag"]
-                last_seq[0] = reader.last_capture_seq()
+                last_seq[0] = manifest["capture_cursor"]
                 last_publish[0] = time.time()
                 published.append(manifest["tag"])
                 print(f"published {manifest['tag']}", file=sys.stderr)
@@ -160,11 +155,34 @@ def cmd_capture(args):
     print(json.dumps(report, indent=2, sort_keys=True))
     if publish_error[0]:
         return 5
-    if crawler.report.denials:
-        return 3
     if crawler.report.errors:
         return 4
+    if crawler.report.denials:
+        return 3
     return 0
+
+
+def cmd_restore(args):
+    """Reconstruct every surviving raw capture across snapshot ancestry."""
+    config = _load_config(args)
+    remote = _remote(args, config)
+    out = Path(args.out)
+    if out.exists():
+        print(f"refusing to overwrite existing destination: {out}", file=sys.stderr)
+        return 4
+    out.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".restore-", dir=out.parent))
+    try:
+        manifest, _cursor = remote.restore(stage, include_historical_raw=True)
+        if manifest is None:
+            print("no published snapshots to restore", file=sys.stderr)
+            return 4
+        stage.rename(out)
+        print(f"restored {manifest['tag']} with full raw lineage to {out}")
+        return 0
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage)
 
 
 def cmd_status(args):
@@ -259,6 +277,11 @@ def build_parser():
     c.add_argument("--fixtures", help="offline replay fixture JSON")
     c.add_argument("--no-publish", action="store_true")
     c.set_defaults(func=cmd_capture)
+
+    r = sub.add_parser("restore", help="reconstruct complete raw archive from release history")
+    common(r)
+    r.add_argument("--out", required=True, help="new directory for recovered archive")
+    r.set_defaults(func=cmd_restore)
 
     s = sub.add_parser("status", help="show the latest snapshot manifest")
     common(s)
