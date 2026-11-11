@@ -1,5 +1,8 @@
 """Media extraction, safety and durable incremental archive tests (offline)."""
 import hashlib
+import gzip
+import json
+from unittest.mock import patch
 from pathlib import Path
 import tarfile
 import tempfile
@@ -83,6 +86,24 @@ class MediaTests(unittest.TestCase):
                        max_assets=4,downloader=fail)
         self.assertEqual(m2["counts"]["attempts"],0)
         self.assertEqual(m2["counts"]["unavailable"],4)
+
+    def test_unsupported_inventory_not_truncated_by_budget(self):
+        discovered = {
+            CDN + "first.jpg": {"origin": "embedded", "host": HOST},
+            "https://zzzz.other.example/last.jpg":
+                {"origin": "embedded", "host": HOST},
+        }
+        with patch.object(media, "discover_media", return_value=discovered):
+            result = media.batch(
+                self.store.root / "index.sqlite", None, self.root / "limited",
+                max_assets=0, downloader=lambda *_args, **_kw:
+                    self.fail("No download should occur"))
+        self.assertEqual(result["counts"]["unsupported"], 1)
+        self.assertEqual(result["counts"]["unprocessed"], 1)
+        with gzip.open(self.root / "limited" / "media-index.json.gz", "rt") as f:
+            index = json.load(f)
+        self.assertEqual(index["https://zzzz.other.example/last.jpg"]["status"],
+                         "unsupported")
 
     def test_parses_anchor_original_and_thumbnail(self):
         p=media.MediaParser()

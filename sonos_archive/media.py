@@ -246,7 +246,10 @@ def batch(index_path, previous_path, stage, max_assets=1000,
                 continue
             if (attempts >= max_assets or new_bytes >= max_bytes or
                     time.monotonic() - start >= max_seconds):
-                break
+                # Still enumerate remaining unsupported links in this batch:
+                # the status index must describe every known media reference,
+                # even when the download budget has been reached.
+                continue
             attempts += 1
             try:
                 body, content_type = downloader(
