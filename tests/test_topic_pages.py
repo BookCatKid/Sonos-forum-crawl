@@ -69,6 +69,41 @@ class TopicPageTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute(
             "SELECT COUNT(*) FROM captures").fetchone()[0], 2)
 
+    def test_unicode_topic_slug_encoded_as_utf8(self):
+        from urllib.parse import quote
+        self.store.set_task(
+            HOST, "topic", "158",
+            url=BASE + "/forum-123/مرحبا-158")
+        path = "/forum-123/مرحبا-158"
+        encoded = quote(path)
+        transport = FixtureTransport({
+            ("GET", BASE + encoded): [
+                (200, {"content-type": "text/html"}, reply_page(158))],
+        })
+        crawler = Crawler(self.store, {
+            "hosts": [HOST], "timeout_seconds": 15,
+            "user_agent": "test-agent", "refresh_listings_after_seconds": 60,
+        }, lambda _host: transport, log=lambda _message: None)
+        crawler.execute(HOST, self.store.next_task(HOST))
+        self.assertEqual(self.store.topic(HOST, "158")["topic_body_state"],
+                         "done")
+        self.assertEqual(transport.sent[0][1], BASE + encoded)
+
+    def test_legitimate_access_denied_topic_is_not_challenge(self):
+        from sonos_archive.forum import Response
+        legitimate = (
+            '<html><title>Access denied to NAS | Sonos Community</title>'
+            '<div data-preact="destination/modules/Content/TopicView/V2/index.sync" '
+            'data-props="{}"></div></html>')
+        r = Response(200, {"content-type": "text/html"},
+                     legitimate.encode(), BASE + "/topic-158")
+        self.assertIsNone(r.denial_reason())
+        interstitial = Response(200, {"content-type": "text/html"},
+                                b"<html><title>Access Denied</title></html>",
+                                BASE + "/topic-158")
+        self.assertEqual(interstitial.denial_reason(),
+                         "challenge:access denied")
+
     def test_redirect_outside_host_fails_closed(self):
         crawler, _ = self.crawler([
             (301, {"Location": "https://elsewhere.example/topic-158"}, ""),

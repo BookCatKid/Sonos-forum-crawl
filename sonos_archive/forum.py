@@ -13,7 +13,7 @@ import re
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit
 
 from .errors import Denied, HttpError, NetworkError, ShapeError
 
@@ -77,8 +77,18 @@ class Response:
         if self.header("cf-mitigated"):
             return "cloudflare-mitigated"
         text = self.text()[:262144].lower()
+        if self.status == 200 and "html" in self.header("content-type"):
+            # A real topic can discuss "access denied", "request blocked",
+            # or "captcha". The embedded site component proves that this is
+            # the forum page, not an anti-bot interstitial.
+            if "data-preact=" in text and "data-props=" in text:
+                return None
         for marker in DENIAL_MARKERS:
             if marker in text:
+                if marker == "access denied" and not re.search(
+                        r"<(?:title|h1)[^>]*>\s*access denied\s*</(?:title|h1)>",
+                        text, re.I):
+                    continue
                 if self.status == 200 and "html" in self.header("content-type"):
                     return f"challenge:{marker}"
                 if self.status == 503:
@@ -157,7 +167,15 @@ class Session:
         self._csrf = None
 
     def _send(self, method, path, payload, kind, accept, allow_redirect=False):
-        url = self.base + path
+        parsed = urlsplit(path)
+        if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
+            raise ShapeError(f"invalid relative URL path: {path}")
+        # Old and multilingual topic slugs can contain literal Unicode. Keep
+        # existing percent escapes while encoding unescaped UTF-8 segments
+        # before urllib/http.client writes the ASCII HTTP request target.
+        safe_path = quote(parsed.path, safe="/%:@!$&'()*+,;=-._~")
+        safe_query = quote(parsed.query, safe="/%:@!$&'()*+,;=?-._~")
+        url = self.base + safe_path + (("?" + safe_query) if parsed.query else "")
         headers = {"User-Agent": self.user_agent, "Accept": accept}
         data = None
         if payload is not None:
