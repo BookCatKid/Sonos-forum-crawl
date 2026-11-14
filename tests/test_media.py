@@ -88,6 +88,31 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(m2["counts"]["attempts"],0)
         self.assertEqual(m2["counts"]["unavailable"],4)
 
+    def test_remaining_batch_budget_does_not_mark_assets_unavailable(self):
+        urls = {CDN + "one.jpg": {"origin": "attachment", "host": HOST},
+                CDN + "two.jpg": {"origin": "attachment", "host": HOST}}
+        calls = []
+        def download(url, max_bytes):
+            calls.append(max_bytes)
+            return b"12345", "image/jpeg"
+        with patch.object(media, "discover_media", return_value=urls), \
+             patch.object(media, "MAX_ITEM_BYTES", 10):
+            result = media.batch(self.store.root / "index.sqlite", None,
+                                 self.root / "budget", max_bytes=14,
+                                 downloader=download)
+        self.assertEqual(calls, [10])
+        self.assertEqual(result["counts"]["unavailable"], 0)
+        self.assertEqual(result["counts"]["unprocessed"], 1)
+
+    def test_genuinely_oversized_asset_has_distinct_status(self):
+        def oversized(url, max_bytes):
+            raise media.AssetTooLarge("asset exceeds item size limit")
+        report = media.batch(self.store.root / "index.sqlite", None,
+                             self.root / "oversized", max_assets=4,
+                             downloader=oversized)
+        self.assertEqual(report["counts"]["oversized"], 4)
+        self.assertEqual(report["counts"]["unavailable"], 0)
+
     def test_first_party_uploads_come_before_external_links(self):
         other = "https://assets.sonos.com/a.jpg"
         first_party = CDN + "original.png"

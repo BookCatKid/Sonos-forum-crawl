@@ -152,6 +152,10 @@ def discover_media(db: sqlite3.Connection) -> dict[str, dict]:
     return result
 
 
+class AssetTooLarge(ValueError):
+    """The source asset exceeds the archive per-item safety limit."""
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -194,10 +198,10 @@ def fetch_asset(url, opener=None, max_bytes=MAX_ITEM_BYTES):
                 raise ValueError("received page rather than media")
             length = response.headers.get("Content-Length")
             if length and int(length) > max_bytes:
-                raise ValueError("asset exceeds item size limit")
+                raise AssetTooLarge("asset exceeds item size limit")
             body = response.read(max_bytes + 1)
             if len(body) > max_bytes:
-                raise ValueError("asset exceeds item size limit")
+                raise AssetTooLarge("asset exceeds item size limit")
             if not body:
                 raise ValueError("empty media asset")
             return body, content_type
@@ -267,9 +271,15 @@ def batch(index_path, previous_path, stage, max_assets=1000,
             cooldown = (TRANSIENT_RETRY_SECONDS
                         if prior and prior.get("status") == "retryable"
                         else RETRY_AFTER_SECONDS)
-            if prior and now - prior.get("checked", 0) < cooldown:
+            # Older batches mislabeled assets as unavailable when the
+            # *batch* byte budget was nearly exhausted. Recheck those now.
+            budget_misclassified = (prior and prior.get("status") == "unavailable"
+                                    and prior.get("error") ==
+                                    "asset exceeds item size limit")
+            if (prior and not budget_misclassified and
+                    now - prior.get("checked", 0) < cooldown):
                 continue
-            if (attempts >= max_assets or new_bytes >= max_bytes or
+            if (attempts >= max_assets or max_bytes - new_bytes < MAX_ITEM_BYTES or
                     time.monotonic() - start >= max_seconds):
                 # Still enumerate remaining unsupported links in this batch:
                 # the status index must describe every known media reference,
@@ -278,7 +288,7 @@ def batch(index_path, previous_path, stage, max_assets=1000,
             attempts += 1
             try:
                 body, content_type = downloader(
-                    url, max_bytes=min(MAX_ITEM_BYTES, max_bytes - new_bytes))
+                    url, max_bytes=MAX_ITEM_BYTES)
                 sha = hashlib.sha256(body).hexdigest()
                 if sha not in stored_shas:
                     ti = tarfile.TarInfo(f"media/sha256/{sha[:2]}/{sha}")
@@ -305,7 +315,8 @@ def batch(index_path, previous_path, stage, max_assets=1000,
                 ) or (isinstance(exc, (URLError, TimeoutError, OSError))
                       and not isinstance(exc, HTTPError))
                 index[url] = {
-                    "status": "retryable" if transient else "unavailable",
+                    "status": ("oversized" if isinstance(exc, AssetTooLarge)
+                               else "retryable" if transient else "unavailable"),
                     "error": str(exc)[:240],
                     "http_status": (exc.code if isinstance(exc, HTTPError) else None),
                     "checked": now, **meta,
@@ -319,6 +330,8 @@ def batch(index_path, previous_path, stage, max_assets=1000,
         "unsupported": sum(not approved_host(u) for u in discovered),
         "unavailable": sum(x.get("status") == "unavailable"
                            for u, x in index.items() if u in discovered),
+        "oversized": sum(x.get("status") == "oversized"
+                         for u, x in index.items() if u in discovered),
         "retryable": sum(x.get("status") == "retryable"
                          for u, x in index.items() if u in discovered),
         "unprocessed": sum(approved_host(u) and u not in index
