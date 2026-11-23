@@ -1,6 +1,7 @@
 """Failure-injection tests for archive durability and recovery."""
 
 import json
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -115,6 +116,41 @@ class DurabilityTests(unittest.TestCase):
         coverage = publish.coverage(self.store, [HOST])
         self.assertFalse(coverage["is_complete_mirror"])
         self.assertFalse(coverage["hosts"][0]["complete"])
+
+    def test_later_checkpoint_recovers_transient_publish_timeout(self):
+        args = SimpleNamespace(
+            config=str(Path(__file__).resolve().parents[1] / "config.json"),
+            remote="local", archive_dir=str(self.root / "archive"),
+            host=None, fixtures=None, run_id="test", checkpoint_seconds=-1,
+            no_publish=False)
+        original_publish = publish.LocalRemote.publish
+        first_attempt_finished = threading.Event()
+        attempts = []
+
+        def intermittent_publish(remote, stage, manifest):
+            attempts.append(manifest["capture_cursor"])
+            if len(attempts) == 1:
+                first_attempt_finished.set()
+                raise TimeoutError("temporary upload timeout")
+            return original_publish(remote, stage, manifest)
+
+        def crawl(crawler, hosts):
+            crawler.store.capture(
+                HOST, "GET", BASE + "/first", None, 200,
+                b"first", "test", "2026-01-01T00:00:00Z")
+            crawler.after_task()
+            self.assertTrue(first_attempt_finished.wait(10))
+            crawler.store.capture(
+                HOST, "GET", BASE + "/second", None, 200,
+                b"second", "test", "2026-01-01T00:00:00Z")
+
+        with patch.object(publish.LocalRemote, "publish", intermittent_publish),                 patch("sonos_archive.cli.Crawler.run", crawl):
+            self.assertEqual(cmd_capture(args), 0)
+        self.assertEqual(attempts, [1, 2])
+        recovered = self.root / "recovered-after-timeout"
+        manifest, cursor = publish.LocalRemote(args.archive_dir).restore(recovered)
+        self.assertEqual(cursor, 2)
+        self.assertEqual(manifest["counts"]["captures"], 2)
 
     def test_cli_refuses_to_rebuild_on_restore_failure(self):
         args = SimpleNamespace(

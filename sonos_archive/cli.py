@@ -109,6 +109,9 @@ def cmd_capture(args):
                 last_seq[0] = manifest["capture_cursor"]
                 last_publish[0] = time.time()
                 published.append(manifest["tag"])
+                # A later cumulative checkpoint supersedes an earlier transient
+                # upload failure; its snapshot contains all prior captures.
+                publish_error[0] = None
                 print(f"published {manifest['tag']}", file=sys.stderr)
             except Exception as e:
                 publish_error[0] = str(e)
